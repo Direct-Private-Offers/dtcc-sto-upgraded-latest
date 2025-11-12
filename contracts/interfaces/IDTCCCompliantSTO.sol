@@ -5,12 +5,14 @@ import "./ICSADerivatives.sol";
 
 interface IDTCCCompliantSTO is ICSADerivatives {
     
-    function issueTokens(
-        address _investor,
-        uint256 _amount,
-        string calldata _ipfsCID,
-        uint256 _lockupPeriod
-    ) external returns (bytes32 issuanceId);
+   // Add this function to the IDTCCCompliantSTO interface
+function issueTokens(
+    address _investor,
+    uint256 _amount,
+    string calldata _ipfsCID,
+    uint256 _lockupPeriod,
+    bytes20 _csdAccount
+) external returns (bytes32 issuanceId);
 
     function verifyInvestor(
         address _investor,

@@ -1,223 +1,297 @@
-# DTCC-Compliant STO with Euroclear Integration
+# DTCC-Compliant STO with Euroclear and Clearstream Integration
 
-A comprehensive integration between Euroclear's securities settlement system and blockchain-based tokenization with full DTCC compliance and CSA derivatives reporting.
+A comprehensive integration between Euroclear/Clearstream securities settlement systems and blockchain-based tokenization with full DTCC compliance and CSA derivatives reporting.
+
+---
 
 ## Overview
+This project provides a complete solution for tokenizing securities from Euroclear and Clearstream settlement systems onto blockchain networks (Arbitrum Nova) while maintaining full compliance with DTCC regulations and CSA derivatives reporting requirements.
 
-This project provides a complete solution for tokenizing securities from Euroclear's settlement system onto blockchain networks (Arbitrum Nova) while maintaining full compliance with DTCC regulations and CSA derivatives reporting requirements.
+---
 
 ## Features
 
-- **Security Tokenization**: Convert Euroclear securities to blockchain tokens (ERC-1400)
-- **CSA Derivatives Reporting**: Complete derivatives reporting with DTCC compliance
-- **Corporate Actions**: Process dividends, splits, mergers on-chain
-- **Settlement Synchronization**: Real-time settlement between Euroclear and blockchain
-- **Compliance Enforcement**: Full regulatory compliance for different offering types (Reg D, Reg CF, Rule 144A, etc.)
-- **Chainlink Integration**: Secure oracle calls for off-chain data verification
-- **Access Control**: Role-based access control for compliance officers, issuers, and reporters
+- **Security Tokenization:** Convert Euroclear/Clearstream securities to blockchain tokens (ERC-1400)
+- **CSA Derivatives Reporting:** Complete derivatives reporting with DTCC compliance
+- **Corporate Actions:** Process dividends, splits, mergers on-chain
+- **Settlement Synchronization:** Real-time settlement between Euroclear/Clearstream and blockchain
+- **Clearstream PMI Integration:** Full Post-Trade Management and Integration API support
+- **Compliance Enforcement:** Regulatory compliance (Reg D, Reg CF, Rule 144A, etc.)
+- **Chainlink Integration:** Secure oracle calls for off-chain data verification
+- **Access Control:** Role-based access control for compliance officers, issuers, and reporters
+- **ISIN Management:** Identifier validation and tracking
+
+---
 
 ## Architecture
 
 ```
-Euroclear API 
-    ↕
-Vercel API Layer 
-    ↕
-EuroclearBridge Contract 
-    ↕
-DTCCCompliantSTO Contract
-    ↑
-Chainlink Oracles
+Euroclear API       Clearstream PMI API
+       ↕                     ↕
+  Vercel API Layer (Dual Integration)
+       ↕                     ↕
+ EuroclearBridge       ClearstreamBridge
+       ↕                     ↕
+      DTCCCompliantSTO Contract (Unified)
+                 ↑
+         Chainlink Oracles
 ```
+
+---
 
 ## Smart Contracts
 
 ### Core Contracts
 
-- **`DTCCCompliantSTO.sol`**: Main security token contract with CSA derivatives compliance
-  - Implements ERC-1400 security token standard
-  - Handles multiple offering types (Reg D, Reg CF, Rule 144A, etc.)
-  - CSA derivatives reporting functionality
+#### `DTCCCompliantSTO.sol`
+- Main security token contract with CSA derivatives compliance and Clearstream integration
+- Implements ERC-1400 standard
+- Supports:
+  - Multiple offering types (Reg D, Reg CF, Rule 144A, etc.)
+  - CSA derivatives reporting
+  - Clearstream PMI API integration
   - Compliance verification and investor management
+  - ISIN whitelisting and validation
 
-- **`EuroclearBridge.sol`**: Bridge contract for Euroclear integration
-  - Tokenizes securities from Euroclear
-  - Processes corporate actions
-  - Handles settlement synchronization
-  - Reports derivatives to Euroclear
+#### `EuroclearBridge.sol`
+- Bridge contract for Euroclear integration
+- Tokenizes securities from Euroclear
+- Processes corporate actions
+- Synchronizes settlement
+- Reports derivatives to Euroclear
 
-- **`DerivativesReporter.sol`**: Standalone contract for CSA derivatives reporting
-  - Validates LEI and UPI identifiers
-  - Reports derivatives to trade repository
-  - Handles corrections and error reporting
-  - Batch reporting support
+#### `ClearstreamBridge.sol`
+- Bridge for Clearstream PMI integration
+- Manages settlement lifecycle and instructions
+- Tracks CSD participant accounts and updates positions in real time
 
-### Interfaces
+#### `DerivativesReporter.sol`
+- Standalone contract for CSA derivatives reporting
+- Validates LEI and UPI identifiers
+- Reports derivatives to trade repository
+- Supports corrections, error handling, and batch reporting
 
-- `IEuroclearIntegration.sol`: Euroclear integration interface
-- `ICSADerivatives.sol`: CSA derivatives reporting interface
-- `IDTCCCompliantSTO.sol`: DTCC compliance interface
-- `ILEIRegistry.sol`: Legal Entity Identifier registry interface
-- `IUPIProvider.sol`: Universal Product Identifier provider interface
-- `ITradeRepository.sol`: Trade repository interface
+---
 
-### Libraries
+## Interfaces
 
-- `ComplianceLib.sol`: Regulatory compliance utilities
-- `CSADerivativesLib.sol`: CSA derivatives data validation and handling
-- `DateTimeLib.sol`: Date and time utilities
+- `IEuroclearIntegration.sol`
+- `ICLEARSTREAMIntegration.sol`
+- `ICSADerivatives.sol`
+- `IDTCCCompliantSTO.sol`
+- `ILEIRegistry.sol`
+- `IUPIProvider.sol`
+- `ITradeRepository.sol`
 
-### Utilities
+---
 
-- `Errors.sol`: Custom error definitions for gas-efficient error handling
+## Libraries
 
-## API Endpoints
+- `ComplianceLib.sol` – Regulatory compliance utilities
+- `CSADerivativesLib.sol` – CSA derivatives validation
+- `ClearstreamLib.sol` – PMI integration utilities and validation
+- `DateTimeLib.sol` – Date/time utilities
+- `Errors.sol` – Custom error definitions
 
-The project includes a Vercel API layer for interacting with the smart contracts:
+---
+
+## API Endpoints (Vercel API Layer)
 
 ### Tokenization
-- `POST /api/issuance` - Tokenize securities from Euroclear
-- `GET /api/issuance?isin=...` - Lookup security details
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/issuance` | Tokenize securities |
+| GET | `/api/issuance?isin=...` | Lookup security details |
 
 ### Settlement
-- `POST /api/settlement` - Sync settlements between Euroclear and blockchain
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/settlement` | Sync settlement |
+| POST | `/api/clearstream/settlement` | Initiate Clearstream settlement |
+| GET  | `/api/clearstream/settlement/:id` | Get settlement status |
 
-### Derivatives
-- `POST /api/derivatives` - Report derivatives to DTCC
-- `GET /api/derivatives?uti=...` - Lookup derivative by UTI
+### Derivatives (DTCC Reporting)
+| Method | Endpoint |
+|--------|----------|
+| POST | `/api/derivatives` |
+| GET  | `/api/derivatives?uti=...` |
 
 ### Corporate Actions
-- `POST /api/corporate-actions` - Process corporate actions (dividends, splits, etc.)
+| Method | Endpoint |
+|--------|----------|
+| POST | `/api/corporate-actions` |
+
+### Clearstream Management
+| Method | Endpoint |
+|--------|----------|
+| POST | `/api/clearstream/accounts` |
+| GET  | `/api/clearstream/positions/:account` |
+| POST | `/api/clearstream/instructions` |
+
+---
+
+## Clearstream PMI Integration Features
+
+### Settlement Management
+- Settlement initiation
+- Automated instruction generation
+- Real-time status tracking
+- Position synchronization
+
+### Account Management
+- CSD account linking
+- ISIN whitelisting
+- Real-time balance/position updates
+
+### Event Logging
+- Full lifecycle audit trail
+- Status notifications
+- Error handling and recovery
+
+---
 
 ## Getting Started
 
 ### Prerequisites
-
-- Node.js 18+ and npm
+- Node.js 18+
 - Hardhat 2.17+
 - Euroclear API credentials
-- Arbitrum Nova RPC URL (or testnet)
-- Private key for deployment (keep secure!)
+- Clearstream PMI API credentials
+- Arbitrum Nova RPC endpoint
 
 ### Installation
 
-1. Clone the repository:
 ```bash
 git clone <repository-url>
 cd dtcc-sto-upgraded
-```
-
-2. Install dependencies:
-```bash
 npm install
 ```
 
-3. Configure environment variables:
+Create `.env` file:
+
 ```bash
 cp .env.example .env
-# Edit .env with your credentials
 ```
 
-4. Compile contracts:
+Compile:
+
 ```bash
 npm run compile
 ```
 
-5. Run tests:
+Run tests:
+
 ```bash
 npm run test
 ```
 
-### Deployment
+---
 
-#### Local Development
+## Deployment
+
+### Local
+
 ```bash
-# Start local Hardhat node
 npx hardhat node
-
-# Deploy to local network
 npx hardhat run scripts/deploy.ts --network localhost
 ```
 
-#### Testnet Deployment
+### Testnet
+
 ```bash
-# Deploy to Arbitrum Goerli
 npm run deploy:test
 ```
 
-#### Mainnet Deployment
+### Mainnet (Arbitrum Nova)
+
 ```bash
-# Deploy to Arbitrum Nova
 npm run deploy
 ```
 
-### Configuration
+---
 
-#### Environment Variables
+## Configuration (.env)
 
-Required variables (see `.env.example` for full list):
+| Variable | Description |
+|----------|-------------|
+| ARBITRUM_NOVA_RPC_URL | Arbitrum Nova RPC URL |
+| PRIVATE_KEY | Deployment key |
+| EUROCLEAR_API_KEY | Euroclear API key |
+| CLEARSTREAM_API_KEY | Clearstream PMI API key |
+| API_AUTH_TOKEN | API auth token |
+| ARBISCAN_API_KEY | Contract verification key (optional) |
 
-- `ARBITRUM_NOVA_RPC_URL`: Arbitrum Nova RPC endpoint
-- `PRIVATE_KEY`: Deployment private key (keep secure!)
-- `EUROCLEAR_API_KEY`: Your Euroclear API key
-- `API_AUTH_TOKEN`: API authentication token
-- `ARBISCAN_API_KEY`: For contract verification (optional)
+---
 
-#### Network Support
+## Network Support
 
-- **Arbitrum Nova** (Mainnet): Chain ID 42170
-- **Arbitrum Goerli** (Testnet): Chain ID 421613
-- **Hardhat Network** (Development): Chain ID 31337
+| Network | Chain ID |
+|---------|----------|
+| Arbitrum Nova | **42170** |
+| Arbitrum Goerli | **421613** |
+| Hardhat Local | **31337** |
+
+---
 
 ## Testing
 
 ```bash
-# Run all tests
 npm run test
-
-# Run integration tests only
 npm run test:integration
-
-# Run derivatives-specific tests
 npm run test:derivatives
-
-# Run with gas reporting
+npm run test:clearstream
 REPORT_GAS=true npm run test
 ```
 
+---
+
 ## Scripts
 
-- `npm run compile` - Compile Solidity contracts
-- `npm run deploy` - Deploy to Arbitrum Nova mainnet
-- `npm run deploy:test` - Deploy to Arbitrum Goerli testnet
-- `npm run test` - Run all tests
-- `npm run test:integration` - Run integration tests
-- `npm run test:derivatives` - Run derivatives tests
-- `npm run lint` - Run ESLint
-- `npm run format` - Format code with Prettier
-- `npm run verify` - Verify contracts on Etherscan
+| Command | Description |
+|---------|-------------|
+| `npm run compile` | Compile contracts |
+| `npm run deploy` | Deploy to Arbitrum Nova |
+| `npm run deploy:test` | Deploy to testnet |
+| `npm run test` | Run all tests |
+| `npm run verify` | Verify contracts |
+
+---
 
 ## Security
 
-- All contracts use OpenZeppelin's battle-tested libraries
-- Access control with role-based permissions
-- Reentrancy guards on all external functions
-- Pausable functionality for emergency stops
-- Comprehensive input validation
-- Custom errors for gas efficiency
+- OpenZeppelin libraries
+- Role-based access control
+- Reentrancy guards
+- Emergency pausable functions
+- Compliance + ISIN/position validation
+
+---
+
+## DPOI Use Case Integration (Direct Private Offers)
+
+- DTCC Eligible Tokens (hybrid asset support)
+- Transfer agent compatibility
+- Cross-chain and DEX listing support
+- Automated smart contract execution (Airbrush MVP)
+
+---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```bash
+git checkout -b feature/amazing-feature
+git commit -m 'Add some amazing feature'
+git push origin feature/amazing-feature
+```
+
+Open a PR.
+
+---
 
 ## License
+MIT License — see `LICENSE`.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+---
 
 ## Disclaimer
-
-This software is provided "as is" without warranty of any kind. Use at your own risk. Ensure compliance with all applicable regulations before deploying to mainnet.
+This software is provided *"as is"* without warranty. Ensure regulatory compliance before deploying to mainnet.

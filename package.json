@@ -1,0 +1,40 @@
+{
+  "name": "euroclear-integration",
+  "version": "1.0.0",
+  "description": "Euroclear API integration with DTCC-compliant security token offering",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy-euroclear.ts --network arbitrumNova",
+    "deploy:test": "hardhat run scripts/deploy-euroclear.ts --network arbitrumGoerli",
+    "deploy:ignition": "hardhat ignition deploy ./ignition/modules/DeployEuroclearBridge.ts --network arbitrumNova",
+    "test": "hardhat test",
+    "test:integration": "hardhat test tests/integration/",
+    "test:derivatives": "hardhat test tests/unit/derivatives.test.ts",
+    "verify": "hardhat verify --network arbitrumNova",
+    "dev": "vercel dev",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "dependencies": {
+    "@chainlink/contracts": "^0.6.1",
+    "@openzeppelin/contracts": "^4.9.3",
+    "axios": "^1.5.0",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.8.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^0.15.0",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "@types/chai": "^4.3.5",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.8.0",
+    "@typescript-eslint/eslint-plugin": "^6.7.0",
+    "@typescript-eslint/parser": "^6.7.0",
+    "@vercel/node": "^2.0.0",
+    "eslint": "^8.50.0",
+    "hardhat": "^2.17.0",
+    "prettier": "^3.0.3",
+    "typescript": "^5.2.0"
+  }
+}

@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Compilation output
+dist/
+build/
+
+# Hardhat Build Artifacts
+artifacts/
+cache/
+typechain-types/
+
+# Hardhat coverage reports
+coverage/
+coverage.json
+.nyc_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+.nyc_output/
+test-results/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS
+Thumbs.db

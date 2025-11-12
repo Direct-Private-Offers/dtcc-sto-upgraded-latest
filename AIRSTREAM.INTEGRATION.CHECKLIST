@@ -1,0 +1,88 @@
+# Airbrush Integration Technical Requirements Report
+
+## Overview
+
+The Airbrush repository (`OriginMarkets/Airbrush`) provides a data specification for fixed-income instrument issuance and a command-line tool to generate machine-readable termsheets based on the Airbrush data standard. The primary focus is on interoperability between market participants through standardized data exchange, rather than direct smart contract integration.
+
+No Solidity contracts, interfaces, or explicit blockchain hooks are present in this repository. The integration points are instead centered on data and document interchange standards. Below, we summarize technical requirements and conventions for integration with the Airbrush specification and tooling, cite relevant files, and provide a reconstructed checklist for integrators based on available repo documentation.
+
+---
+
+## Integration Requirements Checklist
+
+### 1. **Adhere to the Airbrush Data Specification**
+   - **Requirement:** All integrations must use the Airbrush data model to represent security issuances, using the defined field names and JSON schema.
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L3-L24), [Airbrush.yaml - as referenced in README](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L27-L39)
+
+### 2. **Use the OpenAPI Specification for Programmatic Access**
+   - **Requirement:** Leverage the `Airbrush.yaml` (OpenAPI Specification) for generating clients and validating payloads in over 40 languages. This is crucial for automated systems or on-chain/off-chain bridges.
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L27-L39)
+
+### 3. **Generate Termsheets with the Provided Command-Line Tool**
+   - **Requirement:** To produce standardized term sheets, run the Python CLI tool with an Airbrush-compliant JSON file:
+     ```sh
+     python create_termsheet.py <json_input_file> <docx_output_file>
+     ```
+     - *Example:*
+        ```sh
+        python create_termsheet.py Examples/fixed_rate.json Examples/fixed_rate.docx
+        ```
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L106-L128), [`Machine-Readable Termsheet/create_termsheet.py`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/Machine-Readable%20Termsheet/create_termsheet.py#L1-L92)
+
+### 4. **Command-Line Tool Usage and Input Validation**
+   - **Requirement:** The Python tool performs type checks for file extensions and presence. JSON input files must follow the Airbrush format, and DOCX output files are generated with the provided template.
+     - Arguments:
+        - `<json_input_file>`: Path to JSON file (Airbrush Schema).
+        - `<docx_output_file>`: Path where DOCX termsheet will be created.
+     - Validation logic ensures file types and existence.
+   - **Source:** [`Machine-Readable Termsheet/create_termsheet.py`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/Machine-Readable%20Termsheet/create_termsheet.py#L25-L45, L48-L71)
+
+### 5. **Installation Prerequisites**
+   - **Requirement:** Python 3.x is required. Use a virtual environment and install dependencies via pip.
+     ```sh
+     python -m venv venv
+     source venv/bin/activate
+     cd 'Machine-Readable Termsheet'
+     pip install --upgrade pip
+     pip install -r requirements.txt
+     ```
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L68-L92, L93-L102)
+
+### 6. **Reference Examples**
+   - **Requirement:** Integrators should review provided example input/output files under `Machine-Readable Termsheet/Examples` to understand compliant data formats and expected document outputs for various issuance types (Fixed Rate Note, Floating Rate Note, Zero Coupon Note).
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L106-L128)
+
+### 7. **Community Collaboration and Extensions**
+   - **Requirement:** Collaboration is encouraged for extending the schema or adapting the templates, which are open-source for industry use. Feedback and questions are invited at airbrush@originmarkets.com.
+   - **Source:** [`README.md`](https://github.com/OriginMarkets/Airbrush/blob/dbab79b18d8c9b97338f476b411dd5e5a500aa40/README.md#L55-L58)
+
+---
+
+## Integration and Interoperability Guidance
+
+- **No Required Solidity Interfaces or Smart Contract Code:**  
+  This repository does not provide Solidity contracts, interfaces, or on-chain hooks for direct blockchain deployment or interaction. Instead, integrations are done by following the data standards and using the provided tooling for document generation and cross-organization communication.
+
+- **Suitable for Off-Chain to On-Chain Bridges:**  
+  If integrating Airbrush into a smart contract system, you must build a mapping layer that transforms Airbrush-compliant JSON data to the on-chain data structures expected by your contracts. There are _no_ provided standards for contract event signatures, upgradeable proxy patterns, or direct on-chain admin/security models in this repo.
+
+- **Extending or Embedding Airbrush in Other Systems:**  
+  You may extend Airbrush by forking the OpenAPI schema, adapting the Python code, and proposing new fields or templates as your use cases dictate. Citing the data standard assures compatibility with OriginMarkets and other market infrastructure providers using Airbrush.
+
+---
+
+## Key Files and Documentation to Review
+
+- [Airbrush.yaml](https://github.com/OriginMarkets/Airbrush/blob/main/Airbrush.yaml): Primary OpenAPI data specification (referenced in README).
+- [README.md](https://github.com/OriginMarkets/Airbrush/blob/main/README.md): Primary onboarding, installation, and usage guide.
+- [`Machine-Readable Termsheet/create_termsheet.py`](https://github.com/OriginMarkets/Airbrush/blob/main/Machine-Readable%20Termsheet/create_termsheet.py): Python tool for termsheet generation.
+- [`Machine-Readable Termsheet/Examples/`](https://github.com/OriginMarkets/Airbrush/tree/main/Machine-Readable%20Termsheet/Examples): Example input and output files demonstrating Airbrush compliance.
+- [Machine-Readable Termsheet/Machine-Readable Termsheet.docx](https://github.com/OriginMarkets/Airbrush/blob/main/Machine-Readable%20Termsheet/Machine-Readable%20Termsheet.docx): Standard template used for termsheet generation.
+
+---
+
+## Summary
+
+Airbrush integration is primarily **off-chain and data-driven**, requiring conformance to a published schema (OpenAPI YAML/JSON) and usage of the provided Python document tooling. There are **no Solidity contracts, proxy/initializer patterns, event hooks, or blockchain network requirements** within this repository. Integrators wishing to bridge Airbrush into on-chain workflows must map its data structures appropriately and manage all blockchain/contract-related concerns externally.
+
+For further detail or to ensure up-to-date best practices, refer to the linked files and contact airbrush@originmarkets.com.

@@ -1,50 +1,62 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/token/ERC1400/ERC1400.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
-import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/LinkTokenInterface.sol";
 
 import "./interfaces/IDTCCCompliantSTO.sol";
 import "./interfaces/ICSADerivatives.sol";
 import "./interfaces/ICLEARSTREAMIntegration.sol";
+import "./interfaces/IFineractIntegration.sol";
+import "./interfaces/IDPOGLOBALIntegration.sol";
 import "./interfaces/ILEIRegistry.sol";
 import "./interfaces/IUPIProvider.sol";
 import "./interfaces/ITradeRepository.sol";
+import "./interfaces/ISanctionsScreening.sol";
+import "./interfaces/IStateChannels.sol";
 
 import "./lib/ComplianceLib.sol";
 import "./lib/CSADerivativesLib.sol";
 import "./lib/ClearstreamLib.sol";
+import "./lib/FineractLib.sol";
 import "./lib/DateTimeLib.sol";
+import "./lib/DividendLib.sol";
 import "./utils/Errors.sol";
 
 /**
- * @title DTCCCompliantSTO
- * @dev Comprehensive security token with CSA derivatives compliance and Clearstream PMI integration
- * Combines ERC1400 security token features with CSA derivatives reporting and Clearstream settlement
+ * @title DTCCCompliantSTO with Apache Fineract Integration
+ * @dev Comprehensive security token with CSA derivatives compliance, Clearstream PMI, and Fineract integration
+ * Combines ERC1400 security token features with global regulatory compliance
  * @notice This contract handles security token issuance, compliance verification,
- *         CSA derivatives reporting, and Clearstream PMI integration
+ *         CSA derivatives reporting, Clearstream PMI integration, and Fineract banking system sync
  */
 contract DTCCCompliantSTO is 
-    ERC1400, 
+    IERC20,
+    IERC20Metadata,
     ChainlinkClient, 
-    ConfirmedOwner, 
+    Ownable,
     AccessControl, 
     Pausable,
     ReentrancyGuard,
     IDTCCCompliantSTO,
     ICSADerivatives,
-    ICLEARSTREAMIntegration
+    ICLEARSTREAMIntegration,
+    IFineractIntegration,
+    IDPOGLOBALIntegration
 {
     using ComplianceLib for *;
     using CSADerivativesLib for *;
     using ClearstreamLib for *;
+    using FineractLib for *;
     using DateTimeLib for *;
+    using DividendLib for *;
     
     // Roles
     bytes32 public constant COMPLIANCE_OFFICER = keccak256("COMPLIANCE_OFFICER");
@@ -52,6 +64,8 @@ contract DTCCCompliantSTO is
     bytes32 public constant QIB_VERIFIER = keccak256("QIB_VERIFIER");
     bytes32 public constant DERIVATIVES_REPORTER = keccak256("DERIVATIVES_REPORTER");
     bytes32 public constant CLEARSTREAM_OPERATOR = keccak256("CLEARSTREAM_OPERATOR");
+    bytes32 public constant FINERACT_OPERATOR = keccak256("FINERACT_OPERATOR");
+    bytes32 public constant DIVIDEND_MANAGER = keccak256("DIVIDEND_MANAGER");
     
     // Chainlink Configuration
     AggregatorV3Interface internal priceFeed;
@@ -59,16 +73,26 @@ contract DTCCCompliantSTO is
     bytes32 private jobId;
     uint256 private fee;
     
-    // External registries for CSA compliance
+    // External registries for compliance
     ILEIRegistry public leiRegistry;
     IUPIProvider public upiProvider;
     ITradeRepository public tradeRepository;
+    ISanctionsScreening public sanctionsScreening;
+    IStateChannels public stateChannels;
     
     // Security Token State
     OfferingType public currentOfferingType;
     uint256 public regCFMaxRaise = 5_000_000 * 10**18;
     uint256 public totalRaised;
     uint256 public nonAccreditedInvestorCount;
+    
+    // ERC20 State Variables
+    string private _name;
+    string private _symbol;
+    uint8 private constant _decimals = 18;
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
     
     // Mappings
     mapping(bytes32 => Issuance) public issuances;
@@ -89,24 +113,150 @@ contract DTCCCompliantSTO is
     mapping(bytes32 => ClearstreamInstruction[]) public settlementInstructions;
     mapping(bytes32 => ClearstreamEvent[]) public settlementEvents;
     mapping(bytes32 => ClearstreamPosition) public clearstreamPositions;
-    mapping(address => bytes20) public participantAccounts; // CSD participant accounts
-    mapping(bytes32 => bool) public isinWhitelist; // ISIN validation
+    mapping(address => bytes20) public participantAccounts;
+    mapping(bytes32 => bool) public isinWhitelist;
+    
+    // Fineract Integration Storage
+    mapping(bytes32 => FineractTransaction) public fineractTransactions;
+    mapping(address => FineractClientInfo) public fineractClientInfo;
+    mapping(bytes32 => FineractLoan[]) public fineractLoans;
+    mapping(bytes32 => FineractSavings[]) public fineractSavingsAccounts;
+    mapping(address => bool) public syncedWithFineract;
+    uint256 public ledgerSyncThreshold = 10000 * 10**18;
+    
+    // Dividend Distribution Storage
+    mapping(uint256 => DividendCycle) public dividendCycles;
+    mapping(address => mapping(uint256 => bool)) public dividendClaims;
+    mapping(address => uint256) public lastDividendClaim;
+    uint256 public currentDividendCycle;
+    uint256 public totalDividendsDistributed;
+    
+    // Multi-signature Security
+    mapping(bytes32 => MultiSigApproval) public multiSigApprovals;
+    mapping(address => bool) public multiSigSigners;
+    uint256 public largeTransferThreshold = 100000 * 10**18;
+    uint256 public multiSigRequired = 2;
+    
+    // DPO Global LLC Integration
+    mapping(bytes32 => CrossChainSwap) public crossChainSwaps;
+    mapping(string => address) public interlistedExchanges;
+    mapping(address => bool) public dpoGlobalWhitelist;
+    
+    // Corporate Actions
+    mapping(bytes32 => CorporateAction) public corporateActions;
+    mapping(bytes32 => mapping(address => bool)) public corporateActionParticipants;
     
     // Clearstream Configuration
     ClearstreamConfig public clearstreamConfig;
-    bytes12 public isinCode; // International Securities Identification Number
+    bytes12 public isinCode;
+    
+    // Fineract Configuration
+    FineractConfig public fineractConfig;
     
     // Constants (Arbitrum Mainnet)
     address public constant ARB_LINK = 0xf97f4df75117a78c1A5a0DBb814Af92458539FB4;
     address public constant ARB_ORACLE = 0x2362A262148518Ce69600Cc5a6032aC8391233f5;
     bytes32 public constant COMPLIANCE_JOB = "53f9755920cd451a8fe46f5087468395";
-    bytes32 public constant DAC_VERIFICATION_JOB = "a79995d8583345d5b0a3cdcce84b7da5";
-    bytes32 public constant CLEARSTREAM_JOB = "c8b5e5d5e5d5e5d5e5d5e5d5e5d5e5d5"; // Clearstream integration job
+    bytes32 public constant LEDGER_SYNC_JOB = "f1e5d5e5d5e5d5e5d5e5d5e5d5e5d5e5";
     
     // Price feed staleness threshold (1 hour)
     uint256 public constant PRICE_STALENESS_THRESHOLD = 3600;
     
+    // Add missing storage variables
+    mapping(address => bool) public sanctionedAddresses;
+    
     // Structures
+    struct Issuance {
+        bytes32 issuanceId;
+        address issuer;
+        uint256 amount;
+        uint256 timestamp;
+        bool completed;
+        string isin;
+        bytes20 lei;
+    }
+    
+    struct Investor {
+        address investor;
+        InvestorType investorType;
+        uint256 accreditedSince;
+        uint256 investmentLimit;
+        bool verified;
+        bytes20 lei;
+        bytes12 upi;
+    }
+    
+    struct ClearstreamSettlement {
+        bytes32 settlementId;
+        string isin;
+        uint256 quantity;
+        uint256 amount;
+        address buyer;
+        address seller;
+        ClearstreamSettlementStatus status;
+        uint256 settlementDate;
+        uint256 valueDate;
+        string transactionReference;
+    }
+    
+    struct ClearstreamInstruction {
+        bytes32 instructionId;
+        ClearstreamInstructionType instructionType;
+        string isin;
+        uint256 quantity;
+        uint256 amount;
+        address participant;
+        ClearstreamInstructionStatus status;
+        uint256 instructionDate;
+        uint256 settlementDate;
+        string instructionReference; // Changed from 'reference'
+    }
+    
+    struct ClearstreamEvent {
+        bytes32 eventId;
+        ClearstreamEventType eventType;
+        string isin;
+        uint256 timestamp;
+        string description;
+        bytes32 relatedTransaction;
+    }
+    
+    struct ClearstreamPosition {
+        bytes32 positionId;
+        string isin;
+        address participant;
+        uint256 quantity;
+        uint256 availableQuantity;
+        uint256 lockedQuantity;
+        uint256 lastUpdate;
+    }
+    
+    struct ClearstreamConfig {
+        string apiBaseUrl;
+        string csdIdentifier;
+        string participantId;
+        bytes32 apiKeyHash;
+        uint256 settlementCycle;
+        bool autoSettlementEnabled;
+        string defaultCurrency;
+    }
+    
+    struct DerivativeData {
+        bytes32 uti;
+        string productType;
+        uint256 effectiveDate;
+        uint256 expirationDate;
+        uint256 executionTimestamp;
+        uint256 notionalAmount;
+        string notionalCurrency;
+        address counterpartyA;
+        address counterpartyB;
+        string assetClass;
+        string underlyingAsset;
+        uint256 underlyingQuantity;
+        string underlyingCurrency;
+    }
+    
     struct CSACorrection {
         bytes32 priorUti;
         DerivativeData correctedData;
@@ -125,6 +275,18 @@ contract DTCCCompliantSTO is
         bytes32[] underlyingUtis;
         ValuationData valuation;
         uint256 lastUpdated;
+        uint256 collateralValue;
+        uint256 exposure;
+    }
+    
+    struct CollateralData {
+        bytes32 collateralId;
+        string collateralType;
+        uint256 amount;
+        string currency;
+        address provider;
+        uint256 valuationDate;
+        uint256 haircutPercentage;
     }
     
     struct CollateralUpdate {
@@ -133,64 +295,148 @@ contract DTCCCompliantSTO is
         address updatedBy;
     }
     
-    // Clearstream Structures
-    struct ClearstreamSettlement {
-        bytes32 settlementId;
-        bytes32 tradeReference;
-        address buyer;
-        address seller;
-        uint256 quantity;
-        uint256 settlementAmount;
-        ClearstreamSettlementStatus status;
-        uint256 settlementDate;
-        uint256 valueDate;
-        bytes20 buyerAccount;
-        bytes20 sellerAccount;
-        string isin;
-        bytes32 instructionReference;
+    struct ValuationData {
+        uint256 value;
+        string valuationMethod;
+        uint256 valuationDate;
+        string currency;
+        uint256 confidenceInterval;
     }
     
-    struct ClearstreamInstruction {
-        bytes32 instructionId;
-        ClearstreamInstructionType instructionType;
-        bytes32 settlementId;
-        address participant;
-        bytes20 participantAccount;
-        uint256 quantity;
+    // Enums
+    enum InvestorType {
+        RETAIL,
+        ACCREDITED,
+        QIB,
+        INSTITUTIONAL,
+        INSIDER
+    }
+    
+    enum OfferingType {
+        REG_CF,
+        REG_A_PLUS,
+        REG_D_506C,
+        QIB_ONLY
+    }
+    
+    // Fineract Structures
+    struct FineractTransaction {
+        bytes32 transactionId;
+        FineractTransactionType transactionType;
+        address client;
         uint256 amount;
-        ClearstreamInstructionStatus status;
-        uint256 instructionDate;
-        uint256 valueDate;
-        string isin;
-        bytes32 tradeReference;
+        string currencyCode;
+        string description;
+        uint256 transactionDate;
+        bytes32 referenceNumber;
+        bool synced;
+        bytes32 fineractReference;
+        string officeId;
+        string paymentTypeId;
     }
     
-    struct ClearstreamEvent {
-        bytes32 eventId;
-        ClearstreamEventType eventType;
-        bytes32 settlementId;
-        string eventDescription;
-        uint256 eventTimestamp;
-        address triggeredBy;
-        bytes32 referenceId;
+    struct FineractClientInfo {
+        string clientId;
+        string accountNo;
+        string officeId;
+        string staffId;
+        string savingsProductId;
+        string loanProductId;
+        uint256 activationDate;
+        bool active;
+        string externalId;
+        string mobileNo;
+        string emailAddress;
     }
     
-    struct ClearstreamPosition {
-        bytes20 participantAccount;
-        string isin;
-        uint256 position;
+    struct FineractLoan {
+        bytes32 loanId;
+        string loanAccountNo;
+        uint256 principalAmount;
+        uint256 interestRate;
+        uint256 termFrequency;
+        string termPeriodFrequencyType;
+        uint256 numberOfRepayments;
+        uint256 repaymentEvery;
+        string repaymentFrequencyType;
+        string amortizationType;
+        string interestType;
+        string interestCalculationPeriodType;
+        uint256 loanStartDate;
+        uint256 loanEndDate;
+        bool disbursed;
+        bool closed;
+    }
+    
+    struct FineractSavings {
+        bytes32 savingsId;
+        string savingsAccountNo;
+        uint256 accountBalance;
         uint256 availableBalance;
-        uint256 blockedBalance;
-        uint256 lastUpdate;
+        uint256 nominalAnnualInterestRate;
+        string depositType;
+        uint256 depositStartDate;
+        uint256 depositEndDate;
+        bool locked;
     }
     
-    struct ClearstreamConfig {
-        bytes20 defaultCsdAccount;
-        uint256 settlementCycle; // T+1, T+2, etc.
-        bool autoSettlementEnabled;
-        uint256 minSettlementAmount;
-        string marketIdentifier;
-        bytes20 operatingCsd;
+    struct FineractConfig {
+        string apiBaseUrl;
+        string tenantIdentifier;
+        string username;
+        bytes32 apiKeyHash;
+        uint256 syncInterval;
+        bool autoSyncEnabled;
+        string defaultOfficeId;
+        string defaultCurrencyCode;
+    }
+    
+    // Dividend Structures
+    struct DividendCycle {
+        uint256 cycleId;
+        uint256 totalAmount;
+        uint256 recordDate;
+        uint256 paymentDate;
+        uint256 perShareAmount;
+        bool distributed;
+        bytes32 ipfsCID;
+    }
+    
+    // Multi-signature Structures
+    struct MultiSigApproval {
+        bytes32 approvalId;
+        address[] signers;
+        uint256 requiredSignatures;
+        uint256 currentSignatures;
+        bool executed;
+        bytes32 transactionHash;
+        uint256 expiration;
+    }
+    
+    // DPO Global LLC Structures
+    struct CrossChainSwap {
+        bytes32 swapId;
+        address user;
+        address sourceToken;
+        address targetToken;
+        uint256 sourceAmount;
+        uint256 targetAmount;
+        uint256 sourceChain;
+        uint256 targetChain;
+        CrossChainSwapStatus status;
+        uint256 initiationTime;
+        uint256 completionTime;
+    }
+    
+    struct CorporateAction {
+        bytes32 actionId;
+        CorporateActionType actionType;
+        string isin;
+        uint256 recordDate;
+        uint256 executionDate;
+        string details;
+        uint256 entitlementRatio;
+        bool executed;
     }
     
     // Enums
@@ -229,6 +475,34 @@ contract DTCCCompliantSTO is
         CORPORATE_ACTION
     }
     
+    enum FineractTransactionType {
+        DEPOSIT,
+        WITHDRAWAL,
+        LOAN_DISBURSEMENT,
+        LOAN_REPAYMENT,
+        DIVIDEND_PAYMENT,
+        INTEREST_PAYMENT,
+        FEE_COLLECTION,
+        TRANSFER
+    }
+    
+    enum CrossChainSwapStatus {
+        PENDING,
+        EXECUTING,
+        COMPLETED,
+        FAILED,
+        REFUNDED
+    }
+    
+    enum CorporateActionType {
+        DIVIDEND,
+        STOCK_SPLIT,
+        MERGER,
+        ACQUISITION,
+        RIGHTS_OFFERING,
+        SPIN_OFF
+    }
+    
     // Modifiers
     modifier onlyIssuer() {
         require(hasRole(ISSUER_ROLE, msg.sender), "Caller is not an issuer");
@@ -252,6 +526,23 @@ contract DTCCCompliantSTO is
     
     modifier onlyClearstreamOperator() {
         require(hasRole(CLEARSTREAM_OPERATOR, msg.sender), "Caller is not Clearstream operator");
+        _;
+    }
+    
+    modifier onlyFineractOperator() {
+        require(hasRole(FINERACT_OPERATOR, msg.sender), "Caller is not Fineract operator");
+        _;
+    }
+    
+    modifier onlyDividendManager() {
+        require(hasRole(DIVIDEND_MANAGER, msg.sender), "Caller is not dividend manager");
+        _;
+    }
+    
+    modifier requiresMultiSig(uint256 _amount, bytes32 _txHash) {
+        if (_amount >= largeTransferThreshold) {
+            require(multiSigApprovals[_txHash].executed, "Multi-signature approval required");
+        }
         _;
     }
     
@@ -281,1030 +572,1048 @@ contract DTCCCompliantSTO is
         _;
     }
     
+    modifier notSanctioned(address _addr) {
+        require(!sanctionedAddresses[_addr], "Address is sanctioned");
+        _;
+    }
+    
+    modifier onlySyncedWithFineract(address _addr) {
+        require(syncedWithFineract[_addr], "Address not synced with Fineract");
+        _;
+    }
+    
     /**
-     * @dev Constructor for DTCCCompliantSTO with Clearstream integration
-     * @param _name Token name
-     * @param _symbol Token symbol
-     * @param _initialSupply Initial token supply
-     * @param _defaultLockup Default lockup period in seconds
-     * @param _offeringType Type of securities offering (Reg D, Reg CF, etc.)
-     * @param _leiRegistry Address of LEI registry contract
-     * @param _upiProvider Address of UPI provider contract
-     * @param _tradeRepository Address of trade repository contract
-     * @param _isin ISIN code for Clearstream identification
-     * @param _clearstreamConfig Clearstream configuration
+     * @dev Constructor with comprehensive compliance integration
      */
     constructor(
-        string memory _name,
-        string memory _symbol,
+        string memory _name_,
+        string memory _symbol_,
         uint256 _initialSupply,
         uint256 _defaultLockup,
         OfferingType _offeringType,
         address _leiRegistry,
         address _upiProvider,
         address _tradeRepository,
+        address _sanctionsScreening,
+        address _stateChannels,
         string memory _isin,
-        ClearstreamConfig memory _clearstreamConfig
+        ClearstreamConfig memory _clearstreamConfig,
+        FineractConfig memory _fineractConfig
     ) 
-        ERC1400(_name, _symbol)
-        ConfirmedOwner(msg.sender)
+        Ownable(msg.sender)
     {
-        if (_leiRegistry == address(0)) revert Errors.ZeroAddress();
-        if (_upiProvider == address(0)) revert Errors.ZeroAddress();
-        if (_tradeRepository == address(0)) revert Errors.ZeroAddress();
-        if (bytes(_isin).length == 0) revert Errors.InvalidInput();
-        if (_clearstreamConfig.defaultCsdAccount == bytes20(0)) revert Errors.InvalidInput();
+        // Initialize ERC20 variables
+        _name = _name_;
+        _symbol = _symbol_;
         
-        _mint(msg.sender, _initialSupply);
-        
-        // Setup roles
+        // Initialize roles
         _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _setupRole(COMPLIANCE_OFFICER, msg.sender);
         _setupRole(ISSUER_ROLE, msg.sender);
+        _setupRole(COMPLIANCE_OFFICER, msg.sender);
         _setupRole(QIB_VERIFIER, msg.sender);
         _setupRole(DERIVATIVES_REPORTER, msg.sender);
         _setupRole(CLEARSTREAM_OPERATOR, msg.sender);
+        _setupRole(FINERACT_OPERATOR, msg.sender);
+        _setupRole(DIVIDEND_MANAGER, msg.sender);
         
-        // Set external registries
+        // Set Chainlink parameters for Arbitrum
+        setChainlinkToken(ARB_LINK);
+        setChainlinkOracle(ARB_ORACLE);
+        jobId = COMPLIANCE_JOB;
+        fee = 0.1 * 10**18; // 0.1 LINK
+        
+        // Initialize external services
         leiRegistry = ILEIRegistry(_leiRegistry);
         upiProvider = IUPIProvider(_upiProvider);
         tradeRepository = ITradeRepository(_tradeRepository);
+        sanctionsScreening = ISanctionsScreening(_sanctionsScreening);
+        stateChannels = IStateChannels(_stateChannels);
         
-        // Set offering type
+        // Initialize security token parameters
         currentOfferingType = _offeringType;
-        if (_offeringType == OfferingType.REG_CF) {
-            regCFMaxRaise = 5_000_000 * 10**18;
-        }
-        
-        // Clearstream Configuration
+        isinCode = keccak256(bytes(_isin));
+        isinWhitelist[isinCode] = true;
         clearstreamConfig = _clearstreamConfig;
-        isinCode = ClearstreamLib.stringToBytes12(_isin);
-        isinWhitelist[keccak256(bytes(_isin))] = true;
         
-        // Chainlink Setup
-        setChainlinkToken(ARB_LINK);
-        setChainlinkOracle(ARB_ORACLE);
-        priceFeed = AggregatorV3Interface(0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612); // ETH/USD
-        fee = 0.1 * 10**18; // 0.1 LINK
-        jobId = COMPLIANCE_JOB;
+        // Initialize Fineract configuration
+        fineractConfig = _fineractConfig;
         
-        // Set default lockup
-        transferLocks[msg.sender] = block.timestamp + _defaultLockup;
+        // Initialize dividend cycle
+        currentDividendCycle = 1;
         
-        emit OfferingTypeSet(_offeringType, block.timestamp);
-        emit ClearstreamConfigured(_clearstreamConfig.defaultCsdAccount, _isin, block.timestamp);
+        // Initialize multi-signature signers
+        multiSigSigners[msg.sender] = true;
+        
+        // Mint initial supply to deployer
+        _mint(msg.sender, _initialSupply);
     }
     
     // ========================================
-    // Security Token Functions (IDTCCCompliantSTO)
+    // ERC20 Implementation Functions
     // ========================================
     
     /**
-     * @dev Issue security tokens to an investor with Clearstream integration
-     * @param _investor Address of the investor receiving tokens
-     * @param _amount Amount of tokens to issue
-     * @param _ipfsCID IPFS CID of the issuance document
-     * @param _lockupPeriod Lockup period in seconds (0 for no lockup)
-     * @param _csdAccount Clearstream CSD account for the investor
-     * @return issuanceId Unique identifier for this issuance
+     * @dev Returns the name of the token.
      */
-    function issueTokens(
-        address _investor,
-        uint256 _amount,
-        string calldata _ipfsCID,
-        uint256 _lockupPeriod,
-        bytes20 _csdAccount
-    ) external override onlyIssuer returns (bytes32 issuanceId) {
-        if (_investor == address(0)) revert Errors.ZeroAddress();
-        if (_amount == 0) revert Errors.ZeroAmount();
-        if (bytes(_ipfsCID).length == 0) revert Errors.InvalidIPFSCID();
+    function name() public view virtual override returns (string memory) {
+        return _name;
+    }
+    
+    /**
+     * @dev Returns the symbol of the token.
+     */
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
+    }
+    
+    /**
+     * @dev Returns the decimals places of the token.
+     */
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
+    
+    /**
+     * @dev Returns the total supply of the token.
+     */
+    function totalSupply() public view virtual override returns (uint256) {
+        return _totalSupply;
+    }
+    
+    /**
+     * @dev Returns the balance of the specified account.
+     */
+    function balanceOf(address account) public view virtual override returns (uint256) {
+        return _balances[account];
+    }
+    
+    /**
+     * @dev Returns the amount of tokens that spender is allowed to spend on behalf of owner.
+     */
+    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+    
+    /**
+     * @dev Approves the spender to spend the specified amount of tokens.
+     */
+    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Transfers tokens from sender to recipient with compliance checks.
+     */
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+        _beforeTokenTransfer(msg.sender, to, amount);
+        _transfer(msg.sender, to, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Transfers tokens from one account to another with compliance checks.
+     */
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        _beforeTokenTransfer(from, to, amount);
         
-        // Regulatory compliance checks
-        ComplianceLib.validateInvestorForOffering(
-            investors,
-            nonAccreditedInvestorCount,
-            currentOfferingType,
-            _investor,
-            _amount
-        );
+        uint256 currentAllowance = _allowances[from][msg.sender];
+        if (currentAllowance < amount) revert Errors.InsufficientAllowance();
+        unchecked {
+            _approve(from, msg.sender, currentAllowance - amount);
+        }
         
-        issuanceId = keccak256(abi.encodePacked(
-            _investor,
-            block.timestamp,
-            _amount,
-            _ipfsCID
-        ));
+        _transfer(from, to, amount);
+        return true;
+    }
+    
+    /**
+     * @dev Increases the allowance granted to spender.
+     */
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(msg.sender, spender, _allowances[msg.sender][spender] + addedValue);
+        return true;
+    }
+    
+    /**
+     * @dev Decreases the allowance granted to spender.
+     */
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        uint256 currentAllowance = _allowances[msg.sender][spender];
+        if (currentAllowance < subtractedValue) revert Errors.InsufficientAllowance();
+        unchecked {
+            _approve(msg.sender, spender, currentAllowance - subtractedValue);
+        }
+        return true;
+    }
+    
+    /**
+     * @dev Internal transfer function.
+     */
+    function _transfer(address from, address to, uint256 amount) internal virtual {
+        if (from == address(0)) revert Errors.ZeroAddress();
+        if (to == address(0)) revert Errors.ZeroAddress();
+        if (amount == 0) revert Errors.ZeroAmount();
         
-        uint256 lockupEnd = _lockupPeriod > 0 ? block.timestamp + _lockupPeriod : 0;
+        uint256 fromBalance = _balances[from];
+        if (fromBalance < amount) revert Errors.InsufficientBalance();
+        unchecked {
+            _balances[from] = fromBalance - amount;
+            _balances[to] += amount;
+        }
         
-        issuances[issuanceId] = Issuance({
-            investor: _investor,
-            amount: _amount,
-            ipfsCID: _ipfsCID,
-            timestamp: block.timestamp,
-            lockupEnd: lockupEnd,
-            verified: false,
-            accredited: investors[_investor].isAccredited
+        emit Transfer(from, to, amount);
+    }
+    
+    /**
+     * @dev Internal mint function.
+     */
+    function _mint(address account, uint256 amount) internal virtual {
+        if (account == address(0)) revert Errors.ZeroAddress();
+        if (amount == 0) revert Errors.ZeroAmount();
+        
+        _totalSupply += amount;
+        _balances[account] += amount;
+        
+        emit Transfer(address(0), account, amount);
+    }
+    
+    /**
+     * @dev Internal burn function.
+     */
+    function _burn(address account, uint256 amount) internal virtual {
+        if (account == address(0)) revert Errors.ZeroAddress();
+        if (amount == 0) revert Errors.ZeroAmount();
+        
+        uint256 accountBalance = _balances[account];
+        if (accountBalance < amount) revert Errors.InsufficientBalance();
+        unchecked {
+            _balances[account] = accountBalance - amount;
+            _totalSupply -= amount;
+        }
+        
+        emit Transfer(account, address(0), amount);
+    }
+    
+    /**
+     * @dev Internal approve function.
+     */
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        if (owner == address(0)) revert Errors.ZeroAddress();
+        if (spender == address(0)) revert Errors.ZeroAddress();
+        
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+    
+    // ========================================
+    // Fineract Integration Functions
+    // ========================================
+    
+    /**
+     * @dev Sync client with Fineract banking system
+     * @param _client Client address
+     * @param _clientId Fineract client ID
+     * @param _officeId Fineract office ID
+     * @param _externalId External identifier
+     */
+    function syncClientWithFineract(
+        address _client,
+        string calldata _clientId,
+        string calldata _officeId,
+        string calldata _externalId,
+        string calldata _mobileNo,
+        string calldata _emailAddress
+    ) external override onlyFineractOperator returns (bool) {
+        if (_client == address(0)) revert Errors.ZeroAddress();
+        
+        fineractClientInfo[_client] = FineractClientInfo({
+            clientId: _clientId,
+            accountNo: "",  // Will be set when account is created
+            officeId: _officeId,
+            staffId: "",
+            savingsProductId: "",
+            loanProductId: "",
+            activationDate: block.timestamp,
+            active: true,
+            externalId: _externalId,
+            mobileNo: _mobileNo,
+            emailAddress: _emailAddress
         });
         
-        // Update investor record
-        investors[_investor].issuanceIds.push(issuanceId);
-        investors[_investor].totalInvested += _amount;
+        syncedWithFineract[_client] = true;
         
-        // Set Clearstream account for investor
-        if (_csdAccount != bytes20(0)) {
-            participantAccounts[_investor] = _csdAccount;
-            emit ClearstreamAccountLinked(_investor, _csdAccount, block.timestamp);
-        }
+        emit ClientSyncedWithFineract(
+            _client,
+            _clientId,
+            _officeId,
+            block.timestamp
+        );
         
-        if (lockupEnd > 0) {
-            transferLocks[_investor] = lockupEnd;
-            emit TransferLockUpdated(_investor, lockupEnd);
-        }
+        return true;
+    }
+    
+    /**
+     * @dev Create savings account in Fineract for client
+     * @param _client Client address
+     * @param _savingsProductId Fineract savings product ID
+     * @param _nominalAnnualInterestRate Annual interest rate
+     */
+    function createFineractSavingsAccount(
+        address _client,
+        string calldata _savingsProductId,
+        uint256 _nominalAnnualInterestRate,
+        string calldata _depositType
+    ) external override onlyFineractOperator onlySyncedWithFineract(_client) returns (bytes32 savingsId) {
+        savingsId = keccak256(abi.encodePacked(
+            _client,
+            _savingsProductId,
+            block.timestamp
+        ));
         
-        _mint(_investor, _amount);
+        FineractSavings memory savings = FineractSavings({
+            savingsId: savingsId,
+            savingsAccountNo: string(abi.encodePacked("SAV", block.timestamp)),
+            accountBalance: 0,
+            availableBalance: 0,
+            nominalAnnualInterestRate: _nominalAnnualInterestRate,
+            depositType: _depositType,
+            depositStartDate: block.timestamp,
+            depositEndDate: 0,
+            locked: false
+        });
         
-        // Update raise tracking for Reg CF
-        if (currentOfferingType == OfferingType.REG_CF) {
-            totalRaised += _amount;
-            emit RegCFInvestment(_investor, _amount, totalRaised);
-        }
+        fineractSavingsAccounts[savingsId].push(savings);
         
-        // Report to Clearstream for position update
-        _updateClearstreamPosition(_investor, int256(_amount), true);
+        // Update client info with savings product
+        FineractClientInfo storage clientInfo = fineractClientInfo[_client];
+        clientInfo.savingsProductId = _savingsProductId;
         
-        emit IssuanceRecorded(
-            issuanceId,
-            _investor,
+        emit FineractSavingsAccountCreated(
+            savingsId,
+            _client,
+            _savingsProductId,
+            _nominalAnnualInterestRate,
+            block.timestamp
+        );
+        
+        return savingsId;
+    }
+    
+    /**
+     * @dev Create loan account in Fineract
+     * @param _client Client address
+     * @param _loanProductId Fineract loan product ID
+     * @param _principalAmount Loan principal
+     * @param _interestRate Annual interest rate
+     * @param _termFrequency Loan term
+     */
+    function createFineractLoan(
+        address _client,
+        string calldata _loanProductId,
+        uint256 _principalAmount,
+        uint256 _interestRate,
+        uint256 _termFrequency,
+        string calldata _termPeriodFrequencyType,
+        uint256 _numberOfRepayments
+    ) external override onlyFineractOperator onlySyncedWithFineract(_client) returns (bytes32 loanId) {
+        loanId = keccak256(abi.encodePacked(
+            _client,
+            _loanProductId,
+            block.timestamp
+        ));
+        
+        FineractLoan memory loan = FineractLoan({
+            loanId: loanId,
+            loanAccountNo: string(abi.encodePacked("LOAN", block.timestamp)),
+            principalAmount: _principalAmount,
+            interestRate: _interestRate,
+            termFrequency: _termFrequency,
+            termPeriodFrequencyType: _termPeriodFrequencyType,
+            numberOfRepayments: _numberOfRepayments,
+            repaymentEvery: 1, // Monthly by default
+            repaymentFrequencyType: "MONTHS",
+            amortizationType: "EQUAL_PRINCIPAL",
+            interestType: "DECLINING_BALANCE",
+            interestCalculationPeriodType: "SAME_AS_REPAYMENT_PERIOD",
+            loanStartDate: block.timestamp,
+            loanEndDate: block.timestamp + (_termFrequency * 30 days), // Approximate
+            disbursed: false,
+            closed: false
+        });
+        
+        fineractLoans[loanId].push(loan);
+        
+        // Update client info with loan product
+        FineractClientInfo storage clientInfo = fineractClientInfo[_client];
+        clientInfo.loanProductId = _loanProductId;
+        
+        emit FineractLoanCreated(
+            loanId,
+            _client,
+            _loanProductId,
+            _principalAmount,
+            _interestRate,
+            block.timestamp
+        );
+        
+        return loanId;
+    }
+    
+    /**
+     * @dev Record transaction in Fineract ledger
+     * @param _client Client address
+     * @param _amount Transaction amount
+     * @param _transactionType Type of transaction
+     * @param _description Transaction description
+     */
+    function recordFineractTransaction(
+        address _client,
+        uint256 _amount,
+        FineractTransactionType _transactionType,
+        string calldata _description,
+        string calldata _paymentTypeId
+    ) external override onlyFineractOperator returns (bytes32 transactionId) {
+        if (_client == address(0)) revert Errors.ZeroAddress();
+        if (_amount == 0) revert Errors.ZeroAmount();
+        
+        transactionId = keccak256(abi.encodePacked(
+            _client,
             _amount,
-            _ipfsCID,
             block.timestamp,
-            _lockupPeriod
+            uint256(_transactionType)
+        ));
+        
+        FineractClientInfo storage clientInfo = fineractClientInfo[_client];
+        
+        FineractTransaction memory transaction = FineractTransaction({
+            transactionId: transactionId,
+            transactionType: _transactionType,
+            client: _client,
+            amount: _amount,
+            currencyCode: fineractConfig.defaultCurrencyCode,
+            description: _description,
+            transactionDate: block.timestamp,
+            referenceNumber: transactionId,
+            synced: false,
+            fineractReference: bytes32(0),
+            officeId: clientInfo.officeId,
+            paymentTypeId: _paymentTypeId
+        });
+        
+        fineractTransactions[transactionId] = transaction;
+        
+        emit FineractTransactionRecorded(
+            transactionId,
+            _client,
+            _amount,
+            _transactionType,
+            _description,
+            block.timestamp
         );
         
-        // Auto-verify if investor is pre-approved
-        if (investors[_investor].isVerified) {
-            _verifyIssuance(issuanceId, _ipfsCID);
+        // Auto-sync if amount is above threshold
+        if (_amount >= ledgerSyncThreshold && fineractConfig.autoSyncEnabled) {
+            _syncTransactionWithFineract(transactionId);
         }
         
-        return issuanceId;
+        return transactionId;
     }
     
     /**
-     * @dev Verify an investor through Chainlink KYC provider
-     * @param _investor Address of investor to verify
-     * @param _kycProviderURL URL of the KYC provider endpoint
-     * @param _refreshIfVerified If true, refresh verification even if already verified
-     * @return requestId Chainlink request ID for this verification
+     * @dev Sync transaction with Fineract API
+     * @param _transactionId Transaction ID to sync
      */
-    function verifyInvestor(
-        address _investor,
-        string calldata _kycProviderURL,
-        bool _refreshIfVerified
-    ) external override onlyCompliance returns (bytes32 requestId) {
-        if (_investor == address(0)) revert Errors.ZeroAddress();
-        if (bytes(_kycProviderURL).length == 0) revert Errors.InvalidInput();
+    function syncWithFineract(
+        bytes32 _transactionId
+    ) external override onlyFineractOperator {
+        _syncTransactionWithFineract(_transactionId);
+    }
+    
+    function _syncTransactionWithFineract(bytes32 _transactionId) internal {
+        FineractTransaction storage transaction = fineractTransactions[_transactionId];
+        require(!transaction.synced, "Transaction already synced");
         
-        if (!_refreshIfVerified) {
-            if (investors[_investor].isVerified) revert Errors.AlreadyVerified();
-        }
+        // In production, this would make an API call to Fineract
+        // For now, we simulate the sync
+        transaction.synced = true;
+        transaction.fineractReference = keccak256(abi.encodePacked(
+            "FINERACT",
+            block.timestamp,
+            _transactionId
+        ));
         
-        Chainlink.Request memory req = buildChainlinkRequest(
-            jobId,
-            address(this),
-            this.fulfillVerification.selector
+        emit FineractTransactionSynced(
+            _transactionId,
+            transaction.fineractReference,
+            block.timestamp
         );
-        
-        req.add("method", "POST");
-        req.add("url", _kycProviderURL);
-        req.add("body", string(abi.encodePacked(
-            '{"address":"',
-            ComplianceLib.toHexString(_investor),
-            '","tokenContract":"',
-            ComplianceLib.toHexString(address(this)),
-            '"}'
-        )));
-        req.add("path", "accredited");
-        
-        requestId = sendChainlinkRequest(req, fee);
-        pendingVerifications[requestId] = _investor;
-        
-        return requestId;
     }
     
     /**
-     * @dev Callback function for Chainlink oracle to fulfill KYC verification
-     * @param _requestId Chainlink request ID
-     * @param _isAccredited Whether the investor is accredited
+     * @dev Batch sync multiple transactions with Fineract
+     * @param _transactionIds Array of transaction IDs to sync
      */
-    function fulfillVerification(
-        bytes32 _requestId,
-        bool _isAccredited
-    ) public recordChainlinkFulfillment(_requestId) {
-        address investor = pendingVerifications[_requestId];
-        if (investor == address(0)) revert Errors.InvalidRequestId();
-        
-        investors[investor].isVerified = true;
-        investors[investor].isAccredited = _isAccredited;
-        investors[investor].verificationDate = block.timestamp;
-        investors[investor].lastKycRefresh = block.timestamp;
-        
-        emit InvestorVerified(investor, _isAccredited, block.timestamp);
-        
-        // Auto-verify all pending issuances (with gas limit protection)
-        bytes32[] memory issuanceIds = investors[investor].issuanceIds;
-        uint256 maxIterations = issuanceIds.length > 100 ? 100 : issuanceIds.length; // Limit to prevent gas issues
-        for (uint i = 0; i < maxIterations; i++) {
-            if (!issuances[issuanceIds[i]].verified) {
-                issuances[issuanceIds[i]].accredited = _isAccredited;
-                _verifyIssuance(issuanceIds[i], issuances[issuanceIds[i]].ipfsCID);
+    function batchSyncWithFineract(
+        bytes32[] calldata _transactionIds
+    ) external override onlyFineractOperator {
+        for (uint256 i = 0; i < _transactionIds.length; i++) {
+            if (!fineractTransactions[_transactionIds[i]].synced) {
+                _syncTransactionWithFineract(_transactionIds[i]);
             }
         }
     }
     
-    function setTransferLock(
-        address _investor,
-        uint256 _unlockTime
-    ) external override onlyCompliance {
-        transferLocks[_investor] = _unlockTime;
-        emit TransferLockUpdated(_investor, _unlockTime);
+    // ========================================
+    // Dividend Distribution Functions
+    // ========================================
+    
+    /**
+     * @dev Declare dividend distribution
+     */
+    function declareDividend(
+        uint256 _totalAmount,
+        uint256 _recordDate,
+        uint256 _paymentDate,
+        string calldata _ipfsCID
+    ) external override onlyDividendManager returns (uint256 cycleId) {
+        if (_totalAmount == 0) revert Errors.ZeroAmount();
+        if (_recordDate >= _paymentDate) revert Errors.InvalidDate();
+        if (bytes(_ipfsCID).length == 0) revert Errors.InvalidIPFSCID();
+        
+        cycleId = currentDividendCycle;
+        uint256 perShareAmount = _totalAmount / totalSupply();
+        
+        dividendCycles[cycleId] = DividendCycle({
+            cycleId: cycleId,
+            totalAmount: _totalAmount,
+            recordDate: _recordDate,
+            paymentDate: _paymentDate,
+            perShareAmount: perShareAmount,
+            distributed: false,
+            ipfsCID: _ipfsCID
+        });
+        
+        currentDividendCycle++;
+        
+        emit DividendDeclared(
+            cycleId,
+            _totalAmount,
+            perShareAmount,
+            _recordDate,
+            _paymentDate,
+            _ipfsCID,
+            block.timestamp
+        );
+        
+        return cycleId;
     }
     
     /**
-     * @dev Force transfer tokens (compliance override)
-     * @param _from Address to transfer from
-     * @param _to Address to transfer to
-     * @param _amount Amount to transfer
-     * @param _reason Reason for compliance override
+     * @dev Claim dividends for a specific cycle
      */
-    function forceTransfer(
-        address _from,
-        address _to,
-        uint256 _amount,
-        string calldata _reason
-    ) external override onlyCompliance nonReentrant {
-        if (_from == address(0)) revert Errors.ZeroAddress();
-        if (_to == address(0)) revert Errors.ZeroAddress();
-        if (_amount == 0) revert Errors.ZeroAmount();
-        if (bytes(_reason).length == 0) revert Errors.InvalidInput();
+    function claimDividend(uint256 _cycleId) external override nonReentrant {
+        if (_cycleId >= currentDividendCycle) revert Errors.InvalidInput();
+        if (dividendClaims[msg.sender][_cycleId]) revert Errors.AlreadyVerified();
         
-        _transfer(_from, _to, _amount);
-        emit ComplianceOverride(msg.sender, _from, _reason);
-    }
-    
-    function setOfferingType(OfferingType _offeringType) external override onlyCompliance {
-        currentOfferingType = _offeringType;
-        emit OfferingTypeSet(_offeringType, block.timestamp);
-    }
-    
-    function verifyQIB(address _investor, bool _isQIB) external override onlyQIBVerifier {
-        investors[_investor].isQIB = _isQIB;
-        emit QIBVerified(_investor, _isQIB, block.timestamp);
-    }
-    
-    function isQIB(address _investor) external view override returns (bool) {
-        return investors[_investor].isQIB;
-    }
-    
-    // ========================================
-    // CSA Derivatives Functions (ICSADerivatives)
-    // ========================================
-    
-    function reportDerivative(
-        DerivativeData calldata derivativeData,
-        CounterpartyData calldata counterparty1,
-        CounterpartyData calldata counterparty2,
-        CollateralData calldata collateralData,
-        ValuationData calldata valuationData
-    ) external override onlyDerivativesReporter whenNotPaused 
-    onlyValidDerivativeData(derivativeData) 
-    onlyValidLEI(counterparty1.lei) 
-    onlyValidLEI(counterparty2.lei)
-    returns (bytes32 uti) {
+        DividendCycle storage cycle = dividendCycles[_cycleId];
+        if (block.timestamp < cycle.paymentDate) revert Errors.InvalidDate();
+        if (cycle.distributed) revert Errors.InvalidInput();
         
-        _validateCSACounterparty(counterparty1);
-        _validateCSACounterparty(counterparty2);
-        if (!CSADerivativesLib.validateCollateralData(collateralData)) revert Errors.InvalidCollateral();
-        if (!CSADerivativesLib.validateValuationData(valuationData)) revert Errors.InvalidValuation();
+        uint256 holderBalance = balanceOf(msg.sender);
+        if (holderBalance == 0) revert Errors.ZeroAmount();
         
-        // Generate UTI if not provided
-        uti = derivativeData.uti == bytes32(0) ? _generateCSAUTI(derivativeData) : derivativeData.uti;
+        uint256 dividendAmount = holderBalance * cycle.perShareAmount;
         
-        if (derivatives[uti].uti != bytes32(0)) revert Errors.DerivativeAlreadyReported();
+        // Mark as claimed
+        dividendClaims[msg.sender][_cycleId] = true;
+        lastDividendClaim[msg.sender] = block.timestamp;
         
-        // Store derivative data
-        derivatives[uti] = derivativeData;
-        tradeCollateral[uti] = collateralData;
-        
-        // Report to trade repository
-        tradeRepository.submitTrade(
-            uti,
-            derivativeData.priorUti,
-            derivativeData.upi,
-            counterparty1.lei,
-            counterparty2.lei,
-            derivativeData.effectiveDate,
-            derivativeData.expirationDate,
-            derivativeData.executionTimestamp,
-            derivativeData.notionalAmount,
-            derivativeData.notionalCurrency
-        );
-        
-        emit DerivativeReported(
-            uti,
-            msg.sender,
-            block.timestamp,
-            ActionType.NEWT,
-            EventType.TRAD
-        );
-        
-        return uti;
-    }
-    
-    function correctDerivative(
-        bytes32 uti,
-        bytes32 priorUti,
-        DerivativeData calldata correctedData
-    ) external override onlyDerivativesReporter whenNotPaused {
-        if (derivatives[uti].uti == bytes32(0)) revert Errors.DerivativeNotFound();
-        if (priorUti == bytes32(0)) revert Errors.InvalidUTI();
-        if (!CSADerivativesLib.validateCSADate(correctedData.effectiveDate)) revert Errors.InvalidDate();
-        if (!CSADerivativesLib.validateCSADate(correctedData.expirationDate)) revert Errors.InvalidDate();
-        
-        // Store correction
-        derivativeCorrections[uti].push(CSACorrection({
-            priorUti: priorUti,
-            correctedData: correctedData,
-            correctionTimestamp: block.timestamp,
-            correctedBy: msg.sender
-        }));
-        
-        // Update derivative data
-        derivatives[uti] = correctedData;
-        
-        // Report correction to repository
-        tradeRepository.correctTrade(uti, priorUti);
-        
-        emit DerivativeCorrected(uti, priorUti, msg.sender, block.timestamp);
-    }
-    
-    function reportError(
-        bytes32 uti,
-        string calldata reason
-    ) external override onlyDerivativesReporter whenNotPaused {
-        if (derivatives[uti].uti == bytes32(0)) revert Errors.DerivativeNotFound();
-        if (bytes(reason).length == 0) revert Errors.InvalidInput();
-        
-        derivativeErrors[uti].push(CSAErrorReport({
-            reason: reason,
-            reportTimestamp: block.timestamp,
-            reportedBy: msg.sender
-        }));
-        
-        tradeRepository.reportError(uti, reason);
-        
-        emit ErrorReported(uti, msg.sender, block.timestamp, reason);
-    }
-    
-    function reportPosition(
-        bytes32 positionId,
-        bytes32[] calldata underlyingUtis,
-        ValuationData calldata valuationData
-    ) external override onlyDerivativesReporter whenNotPaused {
-        if (positionId == bytes32(0)) revert Errors.InvalidPosition();
-        if (underlyingUtis.length == 0) revert Errors.InvalidInput();
-        if (!CSADerivativesLib.validateValuationData(valuationData)) revert Errors.InvalidValuation();
-        
-        // Validate all underlying derivatives exist (with gas limit protection)
-        uint256 maxUnderlying = underlyingUtis.length > 50 ? 50 : underlyingUtis.length;
-        for (uint i = 0; i < maxUnderlying; i++) {
-            if (derivatives[underlyingUtis[i]].uti == bytes32(0)) revert Errors.InvalidUnderlyingDerivative();
-        }
-        
-        positions[positionId] = CSAPosition({
-            positionId: positionId,
-            underlyingUtis: underlyingUtis,
-            valuation: valuationData,
-            lastUpdated: block.timestamp
-        });
-        
-        emit PositionReported(
-            positionId,
-            msg.sender,
-            block.timestamp,
-            ActionType.NEWT
-        );
-    }
-    
-    function batchReportDerivatives(
-        DerivativeData[] calldata derivativesData,
-        CounterpartyData[] calldata counterparties1,
-        CounterpartyData[] calldata counterparties2,
-        CollateralData[] calldata collateralData,
-        ValuationData[] calldata valuationData
-    ) external override onlyDerivativesReporter whenNotPaused {
-        if (derivativesData.length != counterparties1.length) revert Errors.InvalidInput();
-        if (derivativesData.length != counterparties2.length) revert Errors.InvalidInput();
-        if (derivativesData.length != collateralData.length) revert Errors.InvalidInput();
-        if (derivativesData.length != valuationData.length) revert Errors.InvalidInput();
-        
-        // Limit batch size to prevent gas issues
-        if (derivativesData.length > 20) revert Errors.InvalidInput();
-        
-        for (uint i = 0; i < derivativesData.length; i++) {
-            reportDerivative(
-                derivativesData[i],
-                counterparties1[i],
-                counterparties2[i],
-                collateralData[i],
-                valuationData[i]
+        // Record dividend payment in Fineract
+        if (syncedWithFineract[msg.sender]) {
+            bytes32 transactionId = recordFineractTransaction(
+                msg.sender,
+                dividendAmount,
+                FineractTransactionType.DIVIDEND_PAYMENT,
+                string(abi.encodePacked("Dividend payment for cycle ", _cycleId)),
+                "11" // Default payment type for dividends
+            );
+            
+            emit DividendClaimed(
+                msg.sender,
+                _cycleId,
+                dividendAmount,
+                transactionId,
+                block.timestamp
+            );
+        } else {
+            emit DividendClaimed(
+                msg.sender,
+                _cycleId,
+                dividendAmount,
+                bytes32(0),
+                block.timestamp
             );
         }
     }
     
-    // ========================================
-    // Clearstream PMI Integration Functions (ICLEARSTREAMIntegration)
-    // ========================================
-    
     /**
-     * @dev Initiate settlement through Clearstream PMI
-     * @param _tradeReference Reference ID for the trade
-     * @param _buyer Buyer address
-     * @param _seller Seller address
-     * @param _quantity Quantity of tokens to settle
-     * @param _settlementAmount Settlement amount
-     * @param _valueDate Value date for settlement
-     * @return settlementId Clearstream settlement ID
+     * @dev Distribute dividends for a cycle
      */
-    function initiateSettlement(
-        bytes32 _tradeReference,
-        address _buyer,
-        address _seller,
-        uint256 _quantity,
-        uint256 _settlementAmount,
-        uint256 _valueDate
-    ) external override onlyClearstreamOperator whenNotPaused returns (bytes32 settlementId) {
-        if (_tradeReference == bytes32(0)) revert Errors.InvalidInput();
-        if (_buyer == address(0) || _seller == address(0)) revert Errors.ZeroAddress();
-        if (_quantity == 0) revert Errors.ZeroAmount();
-        if (_settlementAmount == 0) revert Errors.ZeroAmount();
-        if (_valueDate <= block.timestamp) revert Errors.InvalidDate();
+    function distributeDividends(uint256 _cycleId) external override onlyDividendManager {
+        if (_cycleId >= currentDividendCycle) revert Errors.InvalidInput();
         
-        settlementId = keccak256(abi.encodePacked(
-            _tradeReference,
-            _buyer,
-            _seller,
-            _quantity,
-            block.timestamp
-        ));
+        DividendCycle storage cycle = dividendCycles[_cycleId];
+        if (cycle.distributed) revert Errors.InvalidInput();
+        if (block.timestamp < cycle.paymentDate) revert Errors.InvalidDate();
         
-        bytes20 buyerAccount = participantAccounts[_buyer];
-        bytes20 sellerAccount = participantAccounts[_seller];
+        cycle.distributed = true;
+        totalDividendsDistributed += cycle.totalAmount;
         
-        if (buyerAccount == bytes20(0)) revert Errors.NoClearstreamAccount();
-        if (sellerAccount == bytes20(0)) revert Errors.NoClearstreamAccount();
-        
-        clearstreamSettlements[settlementId] = ClearstreamSettlement({
-            settlementId: settlementId,
-            tradeReference: _tradeReference,
-            buyer: _buyer,
-            seller: _seller,
-            quantity: _quantity,
-            settlementAmount: _settlementAmount,
-            status: ClearstreamSettlementStatus.PENDING,
-            settlementDate: block.timestamp,
-            valueDate: _valueDate,
-            buyerAccount: buyerAccount,
-            sellerAccount: sellerAccount,
-            isin: ClearstreamLib.bytes12ToString(isinCode),
-            instructionReference: bytes32(0)
-        });
-        
-        emit ClearstreamSettlementInitiated(
-            settlementId,
-            _tradeReference,
-            _buyer,
-            _seller,
-            _quantity,
-            _settlementAmount,
-            block.timestamp
-        );
-        
-        // Auto-generate settlement instructions if enabled
-        if (clearstreamConfig.autoSettlementEnabled) {
-            _generateSettlementInstructions(settlementId);
-        }
-        
-        return settlementId;
-    }
-    
-    /**
-     * @dev Generate settlement instructions for Clearstream
-     * @param _settlementId Settlement ID to generate instructions for
-     */
-    function generateSettlementInstructions(
-        bytes32 _settlementId
-    ) external override onlyClearstreamOperator whenNotPaused {
-        _generateSettlementInstructions(_settlementId);
-    }
-    
-    /**
-     * @dev Confirm settlement completion
-     * @param _settlementId Settlement ID to confirm
-     * @param _instructionReference Clearstream instruction reference
-     */
-    function confirmSettlement(
-        bytes32 _settlementId,
-        bytes32 _instructionReference
-    ) external override onlyClearstreamOperator whenNotPaused {
-        ClearstreamSettlement storage settlement = clearstreamSettlements[_settlementId];
-        if (settlement.settlementId == bytes32(0)) revert Errors.SettlementNotFound();
-        if (settlement.status != ClearstreamSettlementStatus.INSTRUCTED) revert Errors.InvalidSettlementStatus();
-        
-        settlement.status = ClearstreamSettlementStatus.CONFIRMED;
-        settlement.instructionReference = _instructionReference;
-        
-        // Update positions
-        _updateClearstreamPosition(settlement.buyer, int256(settlement.quantity), true);
-        _updateClearstreamPosition(settlement.seller, -int256(settlement.quantity), false);
-        
-        settlementEvents[_settlementId].push(ClearstreamEvent({
-            eventId: keccak256(abi.encodePacked(_settlementId, block.timestamp, "CONFIRMED")),
-            eventType: ClearstreamEventType.SETTLEMENT_CONFIRMED,
-            settlementId: _settlementId,
-            eventDescription: "Settlement confirmed by Clearstream",
-            eventTimestamp: block.timestamp,
-            triggeredBy: msg.sender,
-            referenceId: _instructionReference
-        }));
-        
-        emit ClearstreamSettlementConfirmed(_settlementId, _instructionReference, block.timestamp);
-    }
-    
-    /**
-     * @dev Complete settlement process
-     * @param _settlementId Settlement ID to complete
-     */
-    function completeSettlement(
-        bytes32 _settlementId
-    ) external override onlyClearstreamOperator whenNotPaused {
-        ClearstreamSettlement storage settlement = clearstreamSettlements[_settlementId];
-        if (settlement.settlementId == bytes32(0)) revert Errors.SettlementNotFound();
-        if (settlement.status != ClearstreamSettlementStatus.CONFIRMED) revert Errors.InvalidSettlementStatus();
-        
-        settlement.status = ClearstreamSettlementStatus.SETTLED;
-        
-        settlementEvents[_settlementId].push(ClearstreamEvent({
-            eventId: keccak256(abi.encodePacked(_settlementId, block.timestamp, "COMPLETED")),
-            eventType: ClearstreamEventType.SETTLEMENT_COMPLETED,
-            settlementId: _settlementId,
-            eventDescription: "Settlement completed successfully",
-            eventTimestamp: block.timestamp,
-            triggeredBy: msg.sender,
-            referenceId: settlement.instructionReference
-        }));
-        
-        emit ClearstreamSettlementCompleted(_settlementId, block.timestamp);
-    }
-    
-    /**
-     * @dev Link investor to Clearstream CSD account
-     * @param _investor Investor address
-     * @param _csdAccount Clearstream CSD account
-     */
-    function linkClearstreamAccount(
-        address _investor,
-        bytes20 _csdAccount
-    ) external override onlyClearstreamOperator {
-        if (_investor == address(0)) revert Errors.ZeroAddress();
-        if (_csdAccount == bytes20(0)) revert Errors.InvalidInput();
-        
-        participantAccounts[_investor] = _csdAccount;
-        
-        // Initialize position if not exists
-        bytes32 positionKey = keccak256(abi.encodePacked(_csdAccount, isinCode));
-        if (clearstreamPositions[positionKey].participantAccount == bytes20(0)) {
-            clearstreamPositions[positionKey] = ClearstreamPosition({
-                participantAccount: _csdAccount,
-                isin: ClearstreamLib.bytes12ToString(isinCode),
-                position: 0,
-                availableBalance: 0,
-                blockedBalance: 0,
-                lastUpdate: block.timestamp
-            });
-        }
-        
-        emit ClearstreamAccountLinked(_investor, _csdAccount, block.timestamp);
-    }
-    
-    /**
-     * @dev Get Clearstream position for an account
-     * @param _csdAccount Clearstream CSD account
-     * @return position Clearstream position data
-     */
-    function getClearstreamPosition(
-        bytes20 _csdAccount
-    ) external view override returns (ClearstreamPosition memory position) {
-        bytes32 positionKey = keccak256(abi.encodePacked(_csdAccount, isinCode));
-        return clearstreamPositions[positionKey];
-    }
-    
-    /**
-     * @dev Update Clearstream configuration
-     * @param _newConfig New Clearstream configuration
-     */
-    function updateClearstreamConfig(
-        ClearstreamConfig memory _newConfig
-    ) external override onlyClearstreamOperator {
-        if (_newConfig.defaultCsdAccount == bytes20(0)) revert Errors.InvalidInput();
-        
-        clearstreamConfig = _newConfig;
-        
-        emit ClearstreamConfigUpdated(
-            _newConfig.defaultCsdAccount,
-            _newConfig.settlementCycle,
-            _newConfig.autoSettlementEnabled,
+        emit DividendsDistributed(
+            _cycleId,
+            cycle.totalAmount,
             block.timestamp
         );
     }
     
-    /**
-     * @dev Add ISIN to whitelist
-     * @param _isin ISIN code to add
-     */
-    function addISINToWhitelist(
-        string memory _isin
-    ) external onlyClearstreamOperator {
-        if (bytes(_isin).length == 0) revert Errors.InvalidInput();
-        
-        isinWhitelist[keccak256(bytes(_isin))] = true;
-        
-        emit ISINWhitelisted(_isin, block.timestamp);
-    }
-    
     // ========================================
-    // Internal Functions
+    // Enhanced Transfer with Fineract Integration
     // ========================================
     
     function _beforeTokenTransfer(
         address _from,
         address _to,
         uint256 _amount
-    ) internal override {
-        // Skip checks for minting/burning
-        if (_from == address(0) || _to == address(0)) {
-            return;
+    ) internal virtual notSanctioned(_from) notSanctioned(_to) {
+        // Check if contract is paused
+        require(!paused(), "Token transfer while paused");
+        
+        // Sanctions screening
+        require(!sanctionedAddresses[_from], "Originator is sanctioned");
+        require(!sanctionedAddresses[_to], "Beneficiary is sanctioned");
+        
+        // Compliance checks
+        if (!_checkCompliance(_from, _to, _amount)) {
+            revert Errors.TransferNotCompliant();
         }
         
-        // KYC check for all transfers
-        if (!investors[_to].isVerified) revert Errors.NotVerified();
-        
-        // Offering-specific restrictions
-        if (currentOfferingType == OfferingType.REG_D_506C) {
-            if (!investors[_to].isAccredited) revert Errors.NotAccredited();
-        }
-        
-        if (currentOfferingType == OfferingType.REG_CF) {
-            ComplianceLib.validateRegCFTransfer(
-                investors,
-                totalRaised,
-                _to,
-                _amount
-            );
-        }
-        
-        // Lockup period check
-        if (block.timestamp < transferLocks[_from]) revert Errors.TokensLocked();
-        
-        // Rule 144A restrictions (qualified institutional buyers only)
-        if (currentOfferingType == OfferingType.RULE_144A) {
-            if (!investors[_to].isQIB) revert Errors.NotQIB();
-        }
-        
-        // Additional CSA compliance checks for derivatives participants
-        _checkCSATransferCompliance(_from, _to, _amount);
-        
-        // Clearstream position validation
-        _validateClearstreamTransfer(_from, _to, _amount);
-        
-        // Report to DTCC
-        _reportTradeToDTCC(_from, _to, _amount);
-    }
-    
-    function _checkCSATransferCompliance(address _from, address _to, uint256 _amount) internal {
-        // Check if either party is involved in derivatives reporting
-        // This could trigger additional compliance requirements
-        if (hasRole(DERIVATIVES_REPORTER, _from) || hasRole(DERIVATIVES_REPORTER, _to)) {
-            // Additional compliance checks for derivatives participants
-            require(
-                investors[_to].isVerified && investors[_from].isVerified,
-                "Both parties must be verified for derivatives-related transfers"
-            );
-            
-            // Emit CSA compliance event
-            bytes20 fromLEI = _getLEIForAddress(_from);
-            bytes20 toLEI = _getLEIForAddress(_to);
-            
-            emit CSAComplianceCheck(_from, fromLEI, true, block.timestamp);
-            emit CSAComplianceCheck(_to, toLEI, true, block.timestamp);
+        // Fineract ledger sync for large transactions
+        if (_amount >= ledgerSyncThreshold) {
+            _syncTransferWithFineract(_from, _to, _amount);
         }
     }
     
-    function _validateClearstreamTransfer(address _from, address _to, uint256 _amount) internal {
-        // Check if both parties have Clearstream accounts for institutional transfers
-        bytes20 fromAccount = participantAccounts[_from];
-        bytes20 toAccount = participantAccounts[_to];
+    function _checkCompliance(address _from, address _to, uint256 _amount) internal returns (bool) {
+        // Check if addresses are sanctioned
+        bool fromSanctioned = sanctionsScreening.screenAddress(_from);
+        bool toSanctioned = sanctionsScreening.screenAddress(_to);
         
-        if (fromAccount != bytes20(0) || toAccount != bytes20(0)) {
-            // At least one party is using Clearstream
-            require(
-                fromAccount != bytes20(0) && toAccount != bytes20(0),
-                "Both parties must have Clearstream accounts for CSD transfers"
-            );
-            
-            // Validate positions
-            bytes32 fromPositionKey = keccak256(abi.encodePacked(fromAccount, isinCode));
-            bytes32 toPositionKey = keccak256(abi.encodePacked(toAccount, isinCode));
-            
-            ClearstreamPosition storage fromPosition = clearstreamPositions[fromPositionKey];
-            ClearstreamPosition storage toPosition = clearstreamPositions[toPositionKey];
-            
-            require(
-                fromPosition.availableBalance >= _amount,
-                "Insufficient available balance in Clearstream position"
-            );
-            
-            // Update positions (will be finalized after settlement)
-            fromPosition.availableBalance -= _amount;
-            fromPosition.blockedBalance += _amount;
-            toPosition.blockedBalance += _amount;
-            
-            emit ClearstreamTransferValidated(
+        if (fromSanctioned || toSanctioned) {
+            if (fromSanctioned) sanctionedAddresses[_from] = true;
+            if (toSanctioned) sanctionedAddresses[_to] = true;
+            return false;
+        }
+        
+        // Check transfer locks
+        if (_from != address(0) && transferLocks[_from] > block.timestamp) {
+            revert Errors.TransferLocked();
+        }
+        
+        // Additional compliance checks can be added here
+        return true;
+    }
+    
+    function _syncTransferWithFineract(address _from, address _to, uint256 _amount) internal {
+        // Record withdrawal for sender
+        if (syncedWithFineract[_from]) {
+            recordFineractTransaction(
                 _from,
+                _amount,
+                FineractTransactionType.WITHDRAWAL,
+                string(abi.encodePacked("Token transfer to ", _to)),
+                "1" // Default payment type for withdrawals
+            );
+        }
+        
+        // Record deposit for receiver
+        if (syncedWithFineract[_to]) {
+            recordFineractTransaction(
                 _to,
                 _amount,
-                fromAccount,
-                toAccount,
-                block.timestamp
+                FineractTransactionType.DEPOSIT,
+                string(abi.encodePacked("Token transfer from ", _from)),
+                "1" // Default payment type for deposits
             );
         }
-    }
-    
-    function _generateSettlementInstructions(bytes32 _settlementId) internal {
-        ClearstreamSettlement storage settlement = clearstreamSettlements[_settlementId];
-        if (settlement.settlementId == bytes32(0)) revert Errors.SettlementNotFound();
         
-        settlement.status = ClearstreamSettlementStatus.INSTRUCTED;
-        
-        // Generate delivery instruction for seller
-        bytes32 deliveryInstructionId = keccak256(abi.encodePacked(_settlementId, "DELIVERY"));
-        settlementInstructions[_settlementId].push(ClearstreamInstruction({
-            instructionId: deliveryInstructionId,
-            instructionType: ClearstreamInstructionType.DELIVERY,
-            settlementId: _settlementId,
-            participant: settlement.seller,
-            participantAccount: settlement.sellerAccount,
-            quantity: settlement.quantity,
-            amount: settlement.settlementAmount,
-            status: ClearstreamInstructionStatus.SENT_TO_CSD,
-            instructionDate: block.timestamp,
-            valueDate: settlement.valueDate,
-            isin: settlement.isin,
-            tradeReference: settlement.tradeReference
-        }));
-        
-        // Generate receipt instruction for buyer
-        bytes32 receiptInstructionId = keccak256(abi.encodePacked(_settlementId, "RECEIPT"));
-        settlementInstructions[_settlementId].push(ClearstreamInstruction({
-            instructionId: receiptInstructionId,
-            instructionType: ClearstreamInstructionType.RECEIPT,
-            settlementId: _settlementId,
-            participant: settlement.buyer,
-            participantAccount: settlement.buyerAccount,
-            quantity: settlement.quantity,
-            amount: settlement.settlementAmount,
-            status: ClearstreamInstructionStatus.SENT_TO_CSD,
-            instructionDate: block.timestamp,
-            valueDate: settlement.valueDate,
-            isin: settlement.isin,
-            tradeReference: settlement.tradeReference
-        }));
-        
-        settlementEvents[_settlementId].push(ClearstreamEvent({
-            eventId: keccak256(abi.encodePacked(_settlementId, block.timestamp, "INSTRUCTED")),
-            eventType: ClearstreamEventType.INSTRUCTION_SENT,
-            settlementId: _settlementId,
-            eventDescription: "Settlement instructions sent to Clearstream",
-            eventTimestamp: block.timestamp,
-            triggeredBy: msg.sender,
-            referenceId: deliveryInstructionId
-        }));
-        
-        emit ClearstreamInstructionsGenerated(_settlementId, deliveryInstructionId, receiptInstructionId, block.timestamp);
-    }
-    
-    function _updateClearstreamPosition(address _participant, int256 _amountDelta, bool _isAvailable) internal {
-        bytes20 csdAccount = participantAccounts[_participant];
-        if (csdAccount == bytes20(0)) return; // Skip if no Clearstream account
-        
-        bytes32 positionKey = keccak256(abi.encodePacked(csdAccount, isinCode));
-        ClearstreamPosition storage position = clearstreamPositions[positionKey];
-        
-        if (position.participantAccount == bytes20(0)) {
-            // Initialize position
-            position.participantAccount = csdAccount;
-            position.isin = ClearstreamLib.bytes12ToString(isinCode);
-            position.position = 0;
-            position.availableBalance = 0;
-            position.blockedBalance = 0;
-            position.lastUpdate = block.timestamp;
-        }
-        
-        if (_amountDelta > 0) {
-            if (_isAvailable) {
-                position.availableBalance += uint256(_amountDelta);
-            }
-            position.position += uint256(_amountDelta);
-        } else if (_amountDelta < 0) {
-            uint256 amountDecrease = uint256(-_amountDelta);
-            if (_isAvailable) {
-                require(position.availableBalance >= amountDecrease, "Insufficient available balance");
-                position.availableBalance -= amountDecrease;
-            }
-            require(position.position >= amountDecrease, "Insufficient position");
-            position.position -= amountDecrease;
-        }
-        
-        position.lastUpdate = block.timestamp;
-        
-        emit ClearstreamPositionUpdated(
-            csdAccount,
-            position.isin,
-            position.position,
-            position.availableBalance,
-            position.blockedBalance,
+        emit FineractLedgerSync(
+            _from,
+            _to,
+            _amount,
             block.timestamp
         );
     }
     
+    // ========================================
+    // Multi-signature Security Functions
+    // ========================================
+    
     /**
-     * @dev Get LEI for an address from the registry
-     * @param _addr Address to lookup LEI for
-     * @return LEI for the address
+     * @dev Initiate multi-signature approval
      */
-    function _getLEIForAddress(address _addr) internal view returns (bytes20) {
-        bytes20 lei = leiRegistry.getLEIForAddress(_addr);
-        if (lei == bytes20(0)) {
-            // If not in registry, return zero (should be handled by caller)
-            return bytes20(0);
-        }
-        return lei;
+    function initiateMultiSigApproval(
+        bytes32 _transactionHash,
+        address[] calldata _signers,
+        uint256 _expiration
+    ) external override onlyCompliance {
+        require(_signers.length >= multiSigRequired, "Insufficient signers");
+        
+        multiSigApprovals[_transactionHash] = MultiSigApproval({
+            approvalId: _transactionHash,
+            signers: _signers,
+            requiredSignatures: multiSigRequired,
+            currentSignatures: 0,
+            executed: false,
+            transactionHash: _transactionHash,
+            expiration: _expiration
+        });
+        
+        emit MultiSigInitiated(_transactionHash, _signers, _expiration, block.timestamp);
     }
     
     /**
-     * @dev Report trade to DTCC with validated price data
-     * @param _from Address transferring tokens
-     * @param _to Address receiving tokens
-     * @param _amount Amount of tokens
+     * @dev Sign multi-signature transaction
      */
-    function _reportTradeToDTCC(
-        address _from,
+    function signMultiSig(bytes32 _transactionHash) external override {
+        MultiSigApproval storage approval = multiSigApprovals[_transactionHash];
+        require(approval.approvalId != bytes32(0), "Approval not found");
+        require(block.timestamp < approval.expiration, "Approval expired");
+        
+        bool isSigner = false;
+        for (uint i = 0; i < approval.signers.length; i++) {
+            if (approval.signers[i] == msg.sender) {
+                isSigner = true;
+                break;
+            }
+        }
+        require(isSigner, "Not an approved signer");
+        
+        approval.currentSignatures++;
+        
+        if (approval.currentSignatures >= approval.requiredSignatures) {
+            approval.executed = true;
+            emit MultiSigExecuted(_transactionHash, block.timestamp);
+        } else {
+            emit MultiSigSigned(_transactionHash, msg.sender, block.timestamp);
+        }
+    }
+    
+    // ========================================
+    // Issuance Functions
+    // ========================================
+    
+    /**
+     * @dev Issue new tokens to an investor
+     */
+    function issueTokens(
         address _to,
-        uint256 _amount
-    ) internal {
-        (
-            uint80 roundId,
-            int256 price,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        ) = priceFeed.latestRoundData();
+        uint256 _amount,
+        string calldata _isin,
+        bytes20 _lei
+    ) external override onlyIssuer onlyValidLEI(_lei) onlyValidISIN(_isin) returns (bytes32 issuanceId) {
+        if (_to == address(0)) revert Errors.ZeroAddress();
+        if (_amount == 0) revert Errors.ZeroAmount();
         
-        // Validate price data
-        if (price <= 0) revert Errors.InvalidPrice();
-        if (updatedAt == 0) revert Errors.PriceFeedError();
-        if (answeredInRound < roundId) revert Errors.StalePrice();
-        if (block.timestamp - updatedAt > PRICE_STALENESS_THRESHOLD) revert Errors.StalePrice();
-        
-        bytes32 dtccRef = keccak256(abi.encodePacked(
-            _from, _to, _amount, block.timestamp, roundId
-        ));
-        
-        // Additional CSA data reporting
-        _reportCSATradeData(_from, _to, _amount, uint256(price));
-        
-        emit TradeReported(
-            _from,
+        issuanceId = keccak256(abi.encodePacked(
             _to,
             _amount,
-            uint256(price),
-            dtccRef,
-            block.timestamp
-        );
+            block.timestamp,
+            _isin
+        ));
+        
+        issuances[issuanceId] = Issuance({
+            issuanceId: issuanceId,
+            issuer: msg.sender,
+            amount: _amount,
+            timestamp: block.timestamp,
+            completed: false,
+            isin: _isin,
+            lei: _lei
+        });
+        
+        // Mint tokens
+        _mint(_to, _amount);
+        
+        // Update issuance status
+        issuances[issuanceId].completed = true;
+        
+        // Update investor record
+        if (investors[_to].investor == address(0)) {
+            investors[_to] = Investor({
+                investor: _to,
+                investorType: InvestorType.RETAIL,
+                accreditedSince: 0,
+                investmentLimit: 0,
+                verified: false,
+                lei: _lei,
+                upi: bytes12(0)
+            });
+        }
+        
+        emit TokensIssued(issuanceId, _to, _amount, _isin, _lei, block.timestamp);
+        
+        return issuanceId;
     }
     
-    function _reportCSATradeData(address _from, address _to, uint256 _amount, uint256 price) internal {
-        // This function would integrate with CSA reporting requirements
-        bytes32 csaTradeRef = keccak256(abi.encodePacked(
-            "CSA_TRADE",
-            _from,
-            _to,
+    // ========================================
+    // Compliance Functions
+    // ========================================
+    
+    /**
+     * @dev Verify investor accreditation
+     */
+    function verifyAccreditation(
+        address _investor,
+        bool _accredited,
+        bytes12 _upi
+    ) external override onlyQIBVerifier onlyValidUPI(_upi) returns (bool) {
+        if (_investor == address(0)) revert Errors.ZeroAddress();
+        
+        Investor storage investor = investors[_investor];
+        investor.verified = true;
+        investor.investorType = _accredited ? InvestorType.ACCREDITED : InvestorType.RETAIL;
+        investor.accreditedSince = _accredited ? block.timestamp : 0;
+        investor.upi = _upi;
+        
+        emit AccreditationVerified(_investor, _accredited, _upi, block.timestamp);
+        
+        return true;
+    }
+    
+    // ========================================
+    // CSA Derivatives Functions
+    // ========================================
+    
+    /**
+     * @dev Report derivative trade
+     */
+    function reportDerivativeTrade(
+        DerivativeData calldata _derivativeData
+    ) external override onlyDerivativesReporter onlyValidDerivativeData(_derivativeData) returns (bytes32 derivativeId) {
+        derivativeId = _derivativeData.uti;
+        
+        derivatives[derivativeId] = _derivativeData;
+        
+        emit DerivativeReported(
+            derivativeId,
+            _derivativeData.productType,
+            _derivativeData.notionalAmount,
+            _derivativeData.notionalCurrency,
+            _derivativeData.effectiveDate,
+            _derivativeData.expirationDate,
+            block.timestamp
+        );
+        
+        return derivativeId;
+    }
+    
+    // ========================================
+    // Clearstream Integration Functions
+    // ========================================
+    
+    /**
+     * @dev Initiate settlement through Clearstream
+     */
+    function initiateClearstreamSettlement(
+        string calldata _isin,
+        uint256 _quantity,
+        uint256 _amount,
+        address _buyer,
+        address _seller
+    ) external override onlyClearstreamOperator onlyValidISIN(_isin) returns (bytes32 settlementId) {
+        if (_buyer == address(0) || _seller == address(0)) revert Errors.ZeroAddress();
+        if (_quantity == 0 || _amount == 0) revert Errors.ZeroAmount();
+        
+        settlementId = keccak256(abi.encodePacked(
+            _isin,
+            _quantity,
             _amount,
-            price,
+            _buyer,
+            _seller,
             block.timestamp
         ));
         
-        emit CSATradeDataReported(csaTradeRef, _from, _to, _amount, block.timestamp);
-    }
-    
-    function _verifyIssuance(bytes32 _issuanceId, string memory _ipfsCID) internal {
-        issuances[_issuanceId].verified = true;
-        emit DACVerified(_issuanceId, _ipfsCID, block.timestamp);
-    }
-    
-    function _generateCSAUTI(DerivativeData calldata derivativeData) internal view returns (bytes32) {
-        return CSADerivativesLib.generateCSAUTI(
-            derivativeData.upi,
-            derivativeData.executionTimestamp,
-            msg.sender,
-            block.chainid
+        clearstreamSettlements[settlementId] = ClearstreamSettlement({
+            settlementId: settlementId,
+            isin: _isin,
+            quantity: _quantity,
+            amount: _amount,
+            buyer: _buyer,
+            seller: _seller,
+            status: ClearstreamSettlementStatus.PENDING,
+            settlementDate: block.timestamp,
+            valueDate: block.timestamp + 2 days, // T+2 settlement
+            transactionReference: string(abi.encodePacked("CS_", settlementId))
+        });
+        
+        emit ClearstreamSettlementInitiated(
+            settlementId,
+            _isin,
+            _quantity,
+            _amount,
+            _buyer,
+            _seller,
+            block.timestamp
         );
+        
+        return settlementId;
     }
     
-    function _validateCSACounterparty(CounterpartyData calldata counterparty) internal pure {
-        require(CSADerivativesLib.validateCSACounterparty(
-            counterparty.lei, 
-            counterparty.walletAddress, 
-            counterparty.jurisdiction
-        ), "Invalid counterparty data");
+    /**
+     * @dev Create settlement instruction
+     */
+    function createSettlementInstruction(
+        ClearstreamInstructionType _instructionType,
+        string calldata _isin,
+        uint256 _quantity,
+        uint256 _amount,
+        address _participant
+    ) external override onlyClearstreamOperator onlyValidISIN(_isin) returns (bytes32 instructionId) {
+        instructionId = keccak256(abi.encodePacked(
+            _instructionType,
+            _isin,
+            _quantity,
+            _amount,
+            _participant,
+            block.timestamp
+        ));
+        
+        ClearstreamInstruction memory instruction = ClearstreamInstruction({
+            instructionId: instructionId,
+            instructionType: _instructionType,
+            isin: _isin,
+            quantity: _quantity,
+            amount: _amount,
+            participant: _participant,
+            status: ClearstreamInstructionStatus.PENDING,
+            instructionDate: block.timestamp,
+            settlementDate: block.timestamp + 2 days,
+            instructionReference: string(abi.encodePacked("INST_", instructionId))
+        });
+        
+        settlementInstructions[instructionId].push(instruction);
+        
+        emit SettlementInstructionCreated(
+            instructionId,
+            _instructionType,
+            _isin,
+            _quantity,
+            _amount,
+            _participant,
+            block.timestamp
+        );
+        
+        return instructionId;
     }
     
     // ========================================
     // View Functions
     // ========================================
     
-    function getDerivativeCorrections(bytes32 uti) external view returns (CSACorrection[] memory) {
-        return derivativeCorrections[uti];
+    function getFineractClientInfo(address _client) external view returns (FineractClientInfo memory) {
+        return fineractClientInfo[_client];
     }
     
-    function getDerivativeErrors(bytes32 uti) external view returns (CSAErrorReport[] memory) {
-        return derivativeErrors[uti];
+    function getFineractTransaction(bytes32 _transactionId) external view returns (FineractTransaction memory) {
+        return fineractTransactions[_transactionId];
     }
     
-    function getPosition(bytes32 positionId) external view returns (CSAPosition memory) {
-        return positions[positionId];
+    function getDividendCycle(uint256 _cycleId) external view returns (DividendCycle memory) {
+        return dividendCycles[_cycleId];
     }
     
-    function getCollateralHistory(bytes32 uti) external view returns (CollateralUpdate[] memory) {
-        return collateralUpdates[uti];
+    function getMultiSigApproval(bytes32 _transactionHash) external view returns (MultiSigApproval memory) {
+        return multiSigApprovals[_transactionHash];
     }
     
-    function getInvestorIssuances(address investor) external view returns (bytes32[] memory) {
-        return investors[investor].issuanceIds;
+    function getCrossChainSwap(bytes32 _swapId) external view returns (CrossChainSwap memory) {
+        return crossChainSwaps[_swapId];
     }
     
-    function getClearstreamSettlement(bytes32 settlementId) external view returns (ClearstreamSettlement memory) {
-        return clearstreamSettlements[settlementId];
+    function getCorporateAction(bytes32 _actionId) external view returns (CorporateAction memory) {
+        return corporateActions[_actionId];
     }
     
-    function getSettlementInstructions(bytes32 settlementId) external view returns (ClearstreamInstruction[] memory) {
-        return settlementInstructions[settlementId];
+    function getInvestor(address _investor) external view returns (Investor memory) {
+        return investors[_investor];
     }
     
-    function getSettlementEvents(bytes32 settlementId) external view returns (ClearstreamEvent[] memory) {
-        return settlementEvents[settlementId];
+    function getIssuance(bytes32 _issuanceId) external view returns (Issuance memory) {
+        return issuances[_issuanceId];
+    }
+    
+    function getDerivative(bytes32 _uti) external view returns (DerivativeData memory) {
+        return derivatives[_uti];
+    }
+    
+    function getClearstreamSettlement(bytes32 _settlementId) external view returns (ClearstreamSettlement memory) {
+        return clearstreamSettlements[_settlementId];
+    }
+    
+    function getSettlementInstruction(bytes32 _instructionId) external view returns (ClearstreamInstruction[] memory) {
+        return settlementInstructions[_instructionId];
     }
     
     // ========================================
     // Admin Functions
     // ========================================
     
-    function withdrawLink() external onlyOwner {
-        LinkTokenInterface link = LinkTokenInterface(chainlinkTokenAddress());
-        require(link.transfer(msg.sender, link.balanceOf(address(this))), "Withdraw failed");
+    function updateFineractConfig(FineractConfig memory _newConfig) external onlyCompliance {
+        fineractConfig = _newConfig;
+        emit FineractConfigUpdated(block.timestamp);
     }
     
-    function updateOracleConfig(
-        address _oracle,
-        bytes32 _complianceJobId,
-        uint256 _fee
-    ) external onlyOwner {
-        oracle = _oracle;
-        jobId = _complianceJobId;
-        fee = _fee;
+    function updateLedgerSyncThreshold(uint256 _newThreshold) external onlyCompliance {
+        ledgerSyncThreshold = _newThreshold;
     }
     
-    function updateLEIRegistry(address newRegistry) external onlyOwner {
-        leiRegistry = ILEIRegistry(newRegistry);
+    function updateLargeTransferThreshold(uint256 _newThreshold) external onlyCompliance {
+        largeTransferThreshold = _newThreshold;
     }
     
-    function updateUPIProvider(address newProvider) external onlyOwner {
-        upiProvider = IUPIProvider(newProvider);
+    function addMultiSigSigner(address _signer) external onlyCompliance {
+        multiSigSigners[_signer] = true;
     }
     
-    function updateTradeRepository(address newRepository) external onlyOwner {
-        tradeRepository = ITradeRepository(newRepository);
+    function addDPOGlobalWhitelist(address _address) external onlyCompliance {
+        dpoGlobalWhitelist[_address] = true;
     }
+    
+    function addISINToWhitelist(string calldata _isin) external onlyCompliance {
+        isinWhitelist[keccak256(bytes(_isin))] = true;
+        emit ISINWhitelisted(_isin, block.timestamp);
+    }
+    
+    function setTransferLock(address _account, uint256 _lockDuration) external onlyCompliance {
+        transferLocks[_account] = block.timestamp + _lockDuration;
+        emit TransferLockSet(_account, _lockDuration, block.timestamp);
+    }
+    
+    // Emergency functions
+    function emergencyHalt(string memory _reason) external onlyCompliance {
+        _pause();
+        emit EmergencyHalt(_reason, block.timestamp);
+    }
+    
+    function emergencyRemoveSanction(address _addr) external onlyCompliance {
+        sanctionedAddresses[_addr] = false;
+        emit SanctionRemoved(_addr, block.timestamp);
+    }
+    
+    // ========================================
+    // Pausable Functions
+    // ========================================
     
     function pause() external onlyCompliance {
         _pause();
@@ -1314,42 +1623,31 @@ contract DTCCCompliantSTO is
         _unpause();
     }
     
-    // ========================================
-    // Helper Functions
-    // ========================================
+    // Events
+    event ClientSyncedWithFineract(address indexed client, string clientId, string officeId, uint256 timestamp);
+    event FineractSavingsAccountCreated(bytes32 indexed savingsId, address indexed client, string savingsProductId, uint256 interestRate, uint256 timestamp);
+    event FineractLoanCreated(bytes32 indexed loanId, address indexed client, string loanProductId, uint256 principalAmount, uint256 interestRate, uint256 timestamp);
+    event FineractTransactionRecorded(bytes32 indexed transactionId, address indexed client, uint256 amount, FineractTransactionType transactionType, string description, uint256 timestamp);
+    event FineractTransactionSynced(bytes32 indexed transactionId, bytes32 fineractReference, uint256 timestamp);
+    event FineractLedgerSync(address indexed from, address indexed to, uint256 amount, uint256 timestamp);
+    event FineractConfigUpdated(uint256 timestamp);
+    event DividendDeclared(uint256 indexed cycleId, uint256 totalAmount, uint256 perShareAmount, uint256 recordDate, uint256 paymentDate, string ipfsCID, uint256 timestamp);
+    event DividendClaimed(address indexed claimant, uint256 indexed cycleId, uint256 amount, bytes32 transactionId, uint256 timestamp);
+    event DividendsDistributed(uint256 indexed cycleId, uint256 totalAmount, uint256 timestamp);
+    event MultiSigInitiated(bytes32 indexed transactionHash, address[] signers, uint256 expiration, uint256 timestamp);
+    event MultiSigSigned(bytes32 indexed transactionHash, address signer, uint256 timestamp);
+    event MultiSigExecuted(bytes32 indexed transactionHash, uint256 timestamp);
+    event EmergencyHalt(string reason, uint256 timestamp);
+    event SanctionRemoved(address indexed addr, uint256 timestamp);
+    event TokensIssued(bytes32 indexed issuanceId, address indexed to, uint256 amount, string isin, bytes20 lei, uint256 timestamp);
+    event AccreditationVerified(address indexed investor, bool accredited, bytes12 upi, uint256 timestamp);
+    event DerivativeReported(bytes32 indexed derivativeId, string productType, uint256 notionalAmount, string currency, uint256 effectiveDate, uint256 expirationDate, uint256 timestamp);
+    event ClearstreamSettlementInitiated(bytes32 indexed settlementId, string isin, uint256 quantity, uint256 amount, address buyer, address seller, uint256 timestamp);
+    event SettlementInstructionCreated(bytes32 indexed instructionId, ClearstreamInstructionType instructionType, string isin, uint256 quantity, uint256 amount, address participant, uint256 timestamp);
+    event ISINWhitelisted(string isin, uint256 timestamp);
+    event TransferLockSet(address indexed account, uint256 lockDuration, uint256 timestamp);
     
-    function generateTestLEI() external view returns (bytes20) {
-        return CSADerivativesLib.generateTestLEI();
-    }
-    
-    function generateTestUPI() external view returns (bytes12) {
-        return CSADerivativesLib.generateTestUPI();
-    }
-    
-    function generateTestUTI() external view returns (bytes32) {
-        return CSADerivativesLib.generateTestUTI();
-    }
-    
-    /**
-     * @dev Get Net Asset Value (NAV) using Chainlink price feed
-     * @return NAV in USD (scaled by price feed decimals)
-     */
-    function getNAV() public view returns (uint256) {
-        (
-            uint80 roundId,
-            int256 price,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        ) = priceFeed.latestRoundData();
-        
-        // Validate price data
-        if (price <= 0) revert Errors.InvalidPrice();
-        if (updatedAt == 0) revert Errors.PriceFeedError();
-        if (answeredInRound < roundId) revert Errors.StalePrice();
-        if (block.timestamp - updatedAt > PRICE_STALENESS_THRESHOLD) revert Errors.StalePrice();
-        
-        if (totalSupply() == 0) return 0;
-        return (totalSupply() * uint256(price)) / 10**priceFeed.decimals();
-    }
+    // ERC20 Events (inherited from IERC20 and IERC20Metadata)
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 }

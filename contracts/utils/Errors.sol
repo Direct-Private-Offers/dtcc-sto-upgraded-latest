@@ -1,66 +1,85 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-/**
- * @title Errors
- * @dev Custom errors for gas-efficient error handling
- */
 library Errors {
     // General errors
     error ZeroAddress();
     error ZeroAmount();
     error InvalidInput();
-    error Unauthorized();
-    
-    // Token issuance errors
-    error InvalidInvestor();
-    error InvalidIPFSCID();
-    error AlreadyVerified();
-    error InvalidRequestId();
-    error InvalidIssuance();
+    error NotAuthorized();
+    error Paused();
     
     // Compliance errors
-    error NotVerified();
-    error NotAccredited();
-    error NotQIB();
-    error TokensLocked();
-    error InvalidOfferingType();
-    error RegCFLimitExceeded();
-    error RegCFInvestmentTooLarge();
-    
-    // Derivatives errors
-    error InvalidUTI();
-    error InvalidDate();
-    error InvalidCurrency();
-    error InvalidNotionalAmount();
-    error DerivativeAlreadyReported();
-    error DerivativeNotFound();
-    error InvalidCounterparty();
-    error InvalidCollateral();
-    error InvalidValuation();
-    error InvalidPosition();
-    error InvalidUnderlyingDerivative();
-    
-    // Price feed errors
-    error InvalidPrice();
-    error StalePrice();
-    error PriceFeedError();
-    
-    // Registry errors
+    error TransferNotCompliant();
+    error InvalidInvestorStatus();
     error InvalidLEI();
     error InvalidUPI();
-    error RegistryNotFound();
+    error InvalidISIN();
+    error AlreadyVerified();
+    
+    // CSA Derivatives errors
+    error InvalidUTI();
+    error InvalidDate();
+    error InvalidNotionalAmount();
+    error InvalidCurrency();
+    error InvalidCounterparty();
+    error InvalidProductType();
+    
+    // Clearstream errors
+    error InvalidISINCode();
+    error InvalidSettlementDate();
+    error InvalidParticipant();
+    error SettlementFailed();
+    
+    // Fineract errors
+    error ClientNotSynced();
+    error InvalidFineractConfig();
+    error InvalidClientId();
+    error InvalidOfficeId();
+    error TransactionNotSynced();
+    error InvalidPaymentType();
+    error InvalidCurrencyCode();
+    
+    // Token errors
+    error TransferLocked();
+    error InsufficientBalance();
+    error TransferToZeroAddress();
+    error InvalidPartition();
+    
+    // Oracle errors
+    error StalePrice();
+    error InvalidOracleResponse();
+    error InsufficientLink();
+    
+    // Multi-signature errors
+    error InsufficientSignatures();
+    error ApprovalExpired();
+    error AlreadySigned();
+    error NotASigner();
+    
+    // Dividend errors
+    error InvalidDividendCycle();
+    error DividendAlreadyClaimed();
+    error InvalidRecordDate();
+    error DividendNotDistributed();
+    error InvalidIPFSCID();
+    
+    // DPO Global errors
+    error InvalidChain();
+    error SwapFailed();
+    error NotWhitelisted();
+    
+    // Sanctions errors
+    error SanctionedAddress();
+    error ScreeningFailed();
+    
+    // State channel errors
+    error InvalidChannel();
+    error ChannelExpired();
+    error InvalidSignature();
     
     // Corporate action errors
-    error InvalidSecurity();
-    error ActionAlreadyProcessed();
-    error InvalidActionType();
-    error InvalidActionAmount();
-    error InvalidSplitRatio();
-    
-    // Transfer errors
-    error TransferFailed();
-    error InsufficientBalance();
-    error ComplianceCheckFailed();
+    error InvalidCorporateAction();
+    error ActionAlreadyExecuted();
+    error InvalidEntitlementRatio();
 }
-

@@ -1,0 +1,37 @@
+name: Smoke Tests
+
+on:
+  deployment:
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        network: [localhost, testnet, mainnet]
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Compile contracts
+        run: npm run compile
+      
+      - name: Run smoke tests on ${{ matrix.network }}
+        run: npm run test:smoke:${{ matrix.network }}
+        env:
+          NETWORK: ${{ matrix.network }}
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          EUROCLEAR_API_KEY: ${{ secrets.EUROCLEAR_API_KEY }}
+          CLEARSTREAM_API_KEY: ${{ secrets.CLEARSTREAM_API_KEY }}
+          FINTREX_API_KEY: ${{ secrets.FINTREX_API_KEY }}

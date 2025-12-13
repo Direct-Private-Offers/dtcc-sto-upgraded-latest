@@ -1,6 +1,9 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
-import "@nomicfoundation/hardhat-ignition";
+import "@nomicfoundation/hardhat-ignition-ethers";
+import "@nomicfoundation/hardhat-verify";
+import "hardhat-gas-reporter";
+import "solidity-coverage";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -11,40 +14,47 @@ const config: HardhatUserConfig = {
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200
-      }
-    }
+        runs: 200,
+      },
+      viaIR: true,
+      metadata: {
+        bytecodeHash: "none",
+      },
+    },
   },
+
   networks: {
-    arbitrumNova: {
-      url: process.env.ARBITRUM_NOVA_RPC_URL || "https://nova.arbitrum.io/rpc",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 42170,
+    hardhat: {
+      chainId: 1337,
+      allowUnlimitedContractSize: true,
       gas: "auto",
       gasPrice: "auto",
-      gasMultiplier: 1.2
     },
+
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 1337,
+    },
+
     arbitrumGoerli: {
-      url: process.env.ARBITRUM_GOERLI_RPC_URL || "https://goerli-rollup.arbitrum.io/rpc",
+      url: process.env.ARBITRUM_GOERLI_RPC || "",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       chainId: 421613,
-      gas: "auto",
-      gasPrice: "auto"
+      gasPrice: "auto",
     },
-    hardhat: {
-      chainId: 31337,
-      allowUnlimitedContractSize: true,
-      mining: {
-        auto: true,
-        interval: 0
-      }
-    }
+
+    arbitrumNova: {
+      url: process.env.ARBITRUM_NOVA_RPC || "",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      chainId: 42170,
+      gasPrice: "auto",
+    },
   },
+
   etherscan: {
     apiKey: {
-      arbitrumOne: process.env.ARBISCAN_API_KEY || "",
-      arbitrumNova: process.env.ARBISCAN_NOVA_API_KEY || "",
-      arbitrumGoerli: process.env.ARBISCAN_API_KEY || ""
+      arbitrumGoerli: process.env.ARBISCAN_API_KEY || "",
+      arbitrumNova: process.env.ARBISCAN_API_KEY || "",
     },
     customChains: [
       {
@@ -52,17 +62,41 @@ const config: HardhatUserConfig = {
         chainId: 42170,
         urls: {
           apiURL: "https://api-nova.arbiscan.io/api",
-          browserURL: "https://nova.arbiscan.io"
-        }
-      }
-    ]
+          browserURL: "https://nova.arbiscan.io/",
+        },
+      },
+    ],
   },
+
   gasReporter: {
     enabled: process.env.REPORT_GAS === "true",
     currency: "USD",
     coinmarketcap: process.env.COINMARKETCAP_API_KEY,
-    token: "ETH"
+    outputFile: "gas-report.txt",
+    noColors: true,
+    showTimeSpent: true,
+    showMethodSig: true,
   },
+
+  paths: {
+    sources: "./contracts",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
+  },
+
+  mocha: {
+    timeout: 120000,
+    retries: 2,
+  },
+
+  typechain: {
+    outDir: "typechain-types",
+    target: "ethers-v6",
+  },
+};
+
+export default config;
   paths: {
     sources: "./contracts",
     tests: "./tests",

@@ -85,25 +85,17 @@ const config: HardhatUserConfig = {
     artifacts: "./artifacts",
   },
 
-  mocha: {
-    timeout: 120000,
-    retries: 2,
+  paths: {
+    sources: "./contracts/issuance",
+    tests: "./test",
+    cache: "./cache",
+    artifacts: "./artifacts",
   },
 
-  typechain: {
+  mocha: {
     outDir: "typechain-types",
     target: "ethers-v6",
   },
-};
-
-export default config;
-  paths: {
-    sources: "./contracts",
-    tests: "./tests",
-    cache: "./cache",
-    artifacts: "./artifacts",
-    ignition: "./ignition"
-  }
 };
 
 export default config;

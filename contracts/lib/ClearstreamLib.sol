@@ -2,8 +2,8 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "./interfaces/ICLEARSTREAMIntegration.sol";
-import "./utils/Errors.sol";
+import "../interfaces/ICLEARSTREAMIntegration.sol";
+import "../utils/Errors.sol";
 
 /**
  * @title ClearstreamLib

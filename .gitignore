@@ -47,5 +47,9 @@ test-results/
 *.temp
 .cache/
 
+# Backups and placeholders
+*.bak
+HOLD/
+
 # OS
 Thumbs.db

@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AuditLog",
+  "description": "Schema for audit logging of issuance contract operations and events",
+  "type": "object",
+  "properties": {
+    "logId": {
+      "type": "string",
+      "description": "Unique identifier for this audit log entry"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the event"
+    },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "RolesConfigured",
+        "OfferingConfigured",
+        "DocumentsUpdated",
+        "InvestorWhitelisted",
+        "CommitmentRecorded",
+        "UnitsIssued",
+        "SettlementRecorded",
+        "Finalized",
+        "ContractDeployed",
+        "AccessDenied",
+        "ErrorOccurred"
+      ],
+      "description": "Type of event being logged"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["INFO", "WARNING", "ERROR", "CRITICAL"],
+      "description": "Severity level of the event"
+    },
+    "contractAddress": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Address of the issuance contract"
+    },
+    "blockchain": {
+      "type": "object",
+      "properties": {
+        "network": {
+          "type": "string",
+          "description": "Network name (mainnet, arbitrumNova, etc.)"
+        },
+        "chainId": {
+          "type": "number",
+          "description": "Chain ID"
+        },
+        "blockNumber": {
+          "type": "number",
+          "description": "Block number where event occurred"
+        },
+        "transactionHash": {
+          "type": "string",
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "description": "Transaction hash"
+        },
+        "gasUsed": {
+          "type": "string",
+          "description": "Gas used for the transaction"
+        },
+        "gasPrice": {
+          "type": "string",
+          "description": "Gas price in wei"
+        }
+      },
+      "required": ["network", "chainId"]
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string",
+          "pattern": "^0x[a-fA-F0-9]{40}$",
+          "description": "Ethereum address of the actor"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ISSUER", "COMPLIANCE_OFFICER", "SETTLEMENT_OPERATOR", "INVESTOR", "SYSTEM", "UNKNOWN"],
+          "description": "Role of the actor"
+        },
+        "ipAddress": {
+          "type": "string",
+          "description": "IP address if available"
+        },
+        "userAgent": {
+          "type": "string",
+          "description": "User agent if available"
+        }
+      },
+      "required": ["address"]
+    },
+    "eventData": {
+      "type": "object",
+      "description": "Event-specific data",
+      "additionalProperties": true
+    },
+    "complianceChecks": {
+      "type": "object",
+      "properties": {
+        "kycVerified": {
+          "type": "boolean"
+        },
+        "amlVerified": {
+          "type": "boolean"
+        },
+        "sanctionsScreened": {
+          "type": "boolean"
+        },
+        "jurisdictionApproved": {
+          "type": "boolean"
+        },
+        "accreditedInvestor": {
+          "type": "boolean"
+        }
+      }
+    },
+    "settlementInfo": {
+      "type": "object",
+      "properties": {
+        "csdSystem": {
+          "type": "string",
+          "enum": ["CLEARSTREAM", "EUROCLEAR", "DTCC", "DPO_GLOBAL", "OTHER"]
+        },
+        "csdReference": {
+          "type": "string",
+          "description": "External settlement reference"
+        },
+        "settlementStatus": {
+          "type": "string",
+          "enum": ["PENDING", "CONFIRMED", "FAILED", "CANCELLED"]
+        },
+        "settlementDate": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "financialData": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "description": "Amount in base currency smallest unit"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code"
+        },
+        "units": {
+          "type": "string",
+          "description": "Number of units/tokens"
+        },
+        "paymentReference": {
+          "type": "string",
+          "description": "Payment system reference"
+        }
+      }
+    },
+    "identifiers": {
+      "type": "object",
+      "properties": {
+        "isin": {
+          "type": "string",
+          "description": "ISIN of the security"
+        },
+        "lei": {
+          "type": "string",
+          "description": "LEI of the issuer"
+        },
+        "upi": {
+          "type": "string",
+          "description": "UPI of the product"
+        },
+        "internalAssetId": {
+          "type": "string",
+          "description": "Internal asset identifier"
+        }
+      }
+    },
+    "errorDetails": {
+      "type": "object",
+      "properties": {
+        "errorCode": {
+          "type": "string"
+        },
+        "errorMessage": {
+          "type": "string"
+        },
+        "stackTrace": {
+          "type": "string"
+        },
+        "revertReason": {
+          "type": "string"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Source of the log entry (e.g., 'event-listener', 'api', 'manual')"
+        },
+        "version": {
+          "type": "string",
+          "description": "Version of the logging system"
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["production", "staging", "development", "test"]
+        },
+        "correlationId": {
+          "type": "string",
+          "description": "Correlation ID for tracking related events"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for categorization and searching"
+        }
+      }
+    },
+    "retentionPolicy": {
+      "type": "object",
+      "properties": {
+        "retainUntil": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Date until which this log should be retained"
+        },
+        "archiveAfter": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Date after which this log can be archived"
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"],
+          "description": "Data classification level"
+        }
+      }
+    }
+  },
+  "required": [
+    "logId",
+    "timestamp",
+    "eventType",
+    "severity",
+    "contractAddress",
+    "blockchain",
+    "actor"
+  ]
+}

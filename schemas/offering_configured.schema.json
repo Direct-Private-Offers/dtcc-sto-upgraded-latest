@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OfferingConfigured",
+  "description": "Schema for the OfferingConfigured event emitted when an offering is configured",
+  "type": "object",
+  "properties": {
+    "offeringConfig": {
+      "type": "object",
+      "properties": {
+        "offeringType": {
+          "type": "string",
+          "description": "Type of offering (e.g., REG_D_506C, REG_CF, 144A)"
+        },
+        "maxRaiseAmount": {
+          "type": "string",
+          "description": "Maximum raise amount in smallest unit of reference currency"
+        },
+        "lockupPeriod": {
+          "type": "number",
+          "description": "Lockup period in seconds from issuance to free transfer"
+        },
+        "startTimestamp": {
+          "type": "number",
+          "description": "Unix timestamp when offering opens"
+        },
+        "endTimestamp": {
+          "type": "number",
+          "description": "Unix timestamp when offering closes"
+        },
+        "baseCurrency": {
+          "type": "string",
+          "description": "Base currency (USD, EUR, etc.)"
+        }
+      },
+      "required": ["offeringType", "maxRaiseAmount", "lockupPeriod", "startTimestamp", "endTimestamp", "baseCurrency"]
+    },
+    "identifiers": {
+      "type": "object",
+      "properties": {
+        "isin": {
+          "type": "string",
+          "description": "International Securities Identification Number"
+        },
+        "lei": {
+          "type": "string",
+          "description": "20-character Legal Entity Identifier"
+        },
+        "upi": {
+          "type": "string",
+          "description": "Unique Product Identifier"
+        },
+        "cusip": {
+          "type": "string",
+          "description": "CUSIP (optional, US-specific)"
+        },
+        "clearstreamId": {
+          "type": "string",
+          "description": "Clearstream identifier"
+        },
+        "euroclearId": {
+          "type": "string",
+          "description": "Euroclear identifier"
+        },
+        "internalAssetId": {
+          "type": "string",
+          "description": "Internal DPO asset identifier"
+        }
+      },
+      "required": ["isin", "lei", "upi"]
+    }
+  },
+  "required": ["offeringConfig", "identifiers"]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Finalized",
+  "description": "Schema for the Finalized event emitted when an offering is closed and configuration becomes immutable",
+  "type": "object",
+  "properties": {
+    "totalCommitted": {
+      "type": "string",
+      "description": "Total amount committed by all investors"
+    },
+    "totalUnitsIssued": {
+      "type": "string",
+      "description": "Total units issued to all investors"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix timestamp when offering was finalized"
+    }
+  },
+  "required": ["totalCommitted", "totalUnitsIssued", "timestamp"]
+}

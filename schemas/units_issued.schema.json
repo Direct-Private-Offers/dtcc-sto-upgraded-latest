@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UnitsIssued",
+  "description": "Schema for the UnitsIssued event emitted when security units are issued to an investor",
+  "type": "object",
+  "properties": {
+    "investor": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Ethereum address of the investor"
+    },
+    "units": {
+      "type": "string",
+      "description": "Number of units issued"
+    },
+    "lockupRelease": {
+      "type": "number",
+      "description": "Unix timestamp when lockup period ends"
+    },
+    "isin": {
+      "type": "string",
+      "description": "International Securities Identification Number"
+    },
+    "lei": {
+      "type": "string",
+      "description": "Legal Entity Identifier"
+    },
+    "upi": {
+      "type": "string",
+      "description": "Unique Product Identifier"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix timestamp of the event"
+    }
+  },
+  "required": ["investor", "units", "lockupRelease", "isin", "lei", "upi"]
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InvestorWhitelisted",
+  "description": "Schema for the InvestorWhitelisted event emitted when an investor is whitelisted",
+  "type": "object",
+  "properties": {
+    "investor": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Ethereum address of the investor"
+    },
+    "jurisdiction": {
+      "type": "string",
+      "description": "Jurisdiction code (2/3-letter country or region code)"
+    },
+    "kycPassed": {
+      "type": "boolean",
+      "description": "Whether KYC has been passed"
+    },
+    "amlPassed": {
+      "type": "boolean",
+      "description": "Whether AML screening has been passed"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix timestamp of the event"
+    }
+  },
+  "required": ["investor", "jurisdiction", "kycPassed", "amlPassed"]
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SettlementRecorded",
+  "description": "Schema for the SettlementRecorded event emitted when settlement is recorded in an external system",
+  "type": "object",
+  "properties": {
+    "investor": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Ethereum address of the investor"
+    },
+    "units": {
+      "type": "string",
+      "description": "Number of units settled"
+    },
+    "settlementSystem": {
+      "type": "string",
+      "enum": ["CLEARSTREAM", "EUROCLEAR", "DTCC", "OTHER"],
+      "description": "Settlement system identifier"
+    },
+    "externalRef": {
+      "type": "string",
+      "description": "External settlement reference from the settlement system"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix timestamp of the event"
+    }
+  },
+  "required": ["investor", "units", "settlementSystem", "externalRef"]
+}

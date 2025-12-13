@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CSDMapping",
+  "description": "Schema for mapping internal securities to Central Securities Depository (CSD) systems",
+  "type": "object",
+  "properties": {
+    "internalAssetId": {
+      "type": "string",
+      "description": "Internal DPO asset identifier"
+    },
+    "isin": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}[A-Z0-9]{9}[0-9]$",
+      "description": "International Securities Identification Number (12 characters)"
+    },
+    "csdMappings": {
+      "type": "array",
+      "description": "List of CSD system mappings",
+      "items": {
+        "type": "object",
+        "properties": {
+          "csdSystem": {
+            "type": "string",
+            "enum": ["CLEARSTREAM", "EUROCLEAR", "DTCC", "DPO_GLOBAL", "OTHER"],
+            "description": "CSD system identifier"
+          },
+          "csdParticipantId": {
+            "type": "string",
+            "description": "Participant ID in the CSD system"
+          },
+          "csdSecurityId": {
+            "type": "string",
+            "description": "Security identifier in the CSD system"
+          },
+          "csdAccountNumber": {
+            "type": "string",
+            "description": "Account number in the CSD system"
+          },
+          "settlementCurrency": {
+            "type": "string",
+            "description": "Settlement currency code"
+          },
+          "apiEndpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "API endpoint for CSD integration"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key reference (encrypted or vault reference)"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether this CSD mapping is currently active",
+            "default": true
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Additional CSD-specific metadata",
+            "additionalProperties": true
+          }
+        },
+        "required": ["csdSystem", "csdSecurityId", "active"]
+      }
+    },
+    "primaryCSD": {
+      "type": "string",
+      "enum": ["CLEARSTREAM", "EUROCLEAR", "DTCC", "DPO_GLOBAL", "OTHER"],
+      "description": "Primary CSD for this security"
+    },
+    "crossBorderLinks": {
+      "type": "array",
+      "description": "Links between different CSD systems for cross-border settlement",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourceCSD": {
+            "type": "string",
+            "description": "Source CSD system"
+          },
+          "targetCSD": {
+            "type": "string",
+            "description": "Target CSD system"
+          },
+          "linkType": {
+            "type": "string",
+            "enum": ["DIRECT", "INDIRECT", "BRIDGE"],
+            "description": "Type of link between CSDs"
+          },
+          "settlementTime": {
+            "type": "number",
+            "description": "Expected settlement time in hours"
+          }
+        },
+        "required": ["sourceCSD", "targetCSD", "linkType"]
+      }
+    },
+    "complianceChecks": {
+      "type": "object",
+      "description": "Compliance requirements for CSD settlement",
+      "properties": {
+        "kycRequired": {
+          "type": "boolean",
+          "default": true
+        },
+        "amlRequired": {
+          "type": "boolean",
+          "default": true
+        },
+        "accreditedInvestorOnly": {
+          "type": "boolean",
+          "default": false
+        },
+        "jurisdictionRestrictions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "2 or 3-letter country codes"
+          }
+        }
+      }
+    },
+    "createdAt": {
+      "type": "number",
+      "description": "Unix timestamp when mapping was created"
+    },
+    "updatedAt": {
+      "type": "number",
+      "description": "Unix timestamp when mapping was last updated"
+    },
+    "createdBy": {
+      "type": "string",
+      "pattern": "^0x[a-fA-F0-9]{40}$",
+      "description": "Ethereum address of creator"
+    }
+  },
+  "required": ["internalAssetId", "isin", "csdMappings", "primaryCSD"]
+}

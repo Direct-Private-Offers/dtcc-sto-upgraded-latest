@@ -1,75 +1,56 @@
 import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
-import "@nomicfoundation/hardhat-ignition";
+import "@nomicfoundation/hardhat-toolbox-viem";
+import "@nomicfoundation/hardhat-ignition-viem";
 import * as dotenv from "dotenv";
+import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
+import hardhatPlugin from "@nomicfoundation/hardhat-verify";
 
 dotenv.config();
 
 const config: HardhatUserConfig = {
+  plugins:[hardhatToolboxViemPlugin,hardhatPlugin],
   solidity: {
-    version: "0.8.19",
+
+    version: "0.8.20",
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200
-      }
-    }
+        runs: 200,
+        details: {
+          yul: true,
+          yulDetails: {
+            stackAllocation: true,
+            optimizerSteps: "dhfoDgvulfnTUtnIf"
+          }
+        }
+      },
+      viaIR: true,
+      metadata: {
+        bytecodeHash: "none",
+      },
+      outputSelection: {
+        "*": {
+          "*": ["evm.bytecode", "evm.deployedBytecode", "abi"],
+        },
+      },
+    },
   },
   networks: {
-    arbitrumNova: {
-      url: process.env.ARBITRUM_NOVA_RPC_URL || "https://nova.arbitrum.io/rpc",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 42170,
-      gas: "auto",
-      gasPrice: "auto",
-      gasMultiplier: 1.2
+    sepolia: {
+      type: "http",
+      chainType: "l1",
+      url: process.env.SEPOLIA_RPC_URL || "",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 11155111,
     },
-    arbitrumGoerli: {
-      url: process.env.ARBITRUM_GOERLI_RPC_URL || "https://goerli-rollup.arbitrum.io/rpc",
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-      chainId: 421613,
-      gas: "auto",
-      gasPrice: "auto"
+    arbitrumOne: {
+      type: "http",
+      chainType: "generic",
+      url: process.env.ARBITRUM_ONE_RPC_URL || "",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 42161,
     },
-    hardhat: {
-      chainId: 31337,
-      allowUnlimitedContractSize: true,
-      mining: {
-        auto: true,
-        interval: 0
-      }
-    }
   },
-  etherscan: {
-    apiKey: {
-      arbitrumOne: process.env.ARBISCAN_API_KEY || "",
-      arbitrumNova: process.env.ARBISCAN_NOVA_API_KEY || "",
-      arbitrumGoerli: process.env.ARBISCAN_API_KEY || ""
-    },
-    customChains: [
-      {
-        network: "arbitrumNova",
-        chainId: 42170,
-        urls: {
-          apiURL: "https://api-nova.arbiscan.io/api",
-          browserURL: "https://nova.arbiscan.io"
-        }
-      }
-    ]
-  },
-  gasReporter: {
-    enabled: process.env.REPORT_GAS === "true",
-    currency: "USD",
-    coinmarketcap: process.env.COINMARKETCAP_API_KEY,
-    token: "ETH"
-  },
-  paths: {
-    sources: "./contracts",
-    tests: "./tests",
-    cache: "./cache",
-    artifacts: "./artifacts",
-    ignition: "./ignition"
-  }
 };
 
 export default config;

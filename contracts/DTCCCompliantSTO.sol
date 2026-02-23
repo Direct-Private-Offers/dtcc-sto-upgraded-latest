@@ -2,41 +2,106 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
-import "./modules/interfaces/ITokenCore.sol";
-import "./modules/interfaces/IComplianceManager.sol";
-import "./modules/interfaces/ICSADerivativesManager.sol";
-import "./modules/interfaces/IClearstreamManager.sol";
-import "./interfaces/IDTCCCompliantSTO.sol";
-import "./interfaces/ICLEARSTREAMIntegration.sol";
 
-/**
- * @title DTCCCompliantSTO
- * @dev Main orchestrator contract that delegates to specialized modules
- */
-contract DTCCCompliantSTO is AccessControl, Pausable, ReentrancyGuard, IDTCCCompliantSTO {
-    bytes32 public constant COMPLIANCE_OFFICER = keccak256("COMPLIANCE_OFFICER");
-    bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+// Minimal interfaces to reduce imports
+interface ITokenCoreMinimal {
+    function name() external view returns (string memory);
+    function symbol() external view returns (string memory);
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address) external view returns (uint256);
+    function transfer(address, address, uint256) external returns (bool);
+    function allowance(address, address) external view returns (uint256);
+    function approve(address, address, uint256) external returns (bool);
+    function transferFrom(address, address, address, uint256) external returns (bool);
+    function balanceOfByPartition(bytes32, address) external view returns (uint256);
+    function partitionsOf(address) external view returns (bytes32[] memory);
+    function transferByPartition(bytes32, address, address, address, uint256, bytes calldata, string calldata) external returns (bytes32);
+    function mint(address, uint256, bytes32) external;
+    function getDefaultPartitions() external view returns (bytes32[] memory);
+}
+
+interface IComplianceManagerMinimal {
+    function validateTransfer(address, address, uint256) external;
+    function isAccredited(address) external view returns (bool);
+    function setTransferLock(address, uint256) external;
+    function recordInvestment(address, uint256) external;
+    function verifyInvestor(address, string calldata) external returns (bytes32);
+    function setQIBStatus(address, bool) external;
+    function isQIB(address) external view returns (bool);
+    function setKYC(address, bool, uint64) external;
+    function isKYCValid(address) external view returns (bool);
+    function setOfferingType(uint8) external;
+}
+
+interface ICSADerivativesManagerMinimal {
+    function reportDerivative(
+        bytes calldata, bytes calldata, bytes calldata, bytes calldata, bytes calldata
+    ) external returns (bytes32);
+    function correctDerivative(bytes32, bytes32, bytes calldata) external;
+    function reportError(bytes32, string calldata) external;
+    function reportPosition(bytes32, bytes32[] calldata, bytes calldata) external;
+    function batchReportDerivatives(
+        bytes[] calldata, bytes[] calldata, bytes[] calldata, bytes[] calldata, bytes[] calldata
+    ) external;
+}
+
+interface IClearstreamManagerMinimal {
+    function initiateSettlement(bytes32, address, address, uint256, uint256, uint256) external returns (bytes32);
+    function generateSettlementInstructions(bytes32) external;
+    function confirmSettlement(bytes32, bytes32) external;
+    function completeSettlement(bytes32) external;
+    function linkClearstreamAccount(address, bytes20) external;
+}
+
+// Minimal Pausable - single slot
+abstract contract MinimalPausable {
+    bool private _paused;
+    modifier whenNotPaused() { require(!_paused, "1"); _; }
+    function _pause() internal { _paused = true; }
+    function _unpause() internal { _paused = false; }
+}
+
+// Minimal ReentrancyGuard - single slot
+abstract contract MinimalReentrancyGuard {
+    uint256 private _status = 1;
+    modifier nonReentrant() {
+        require(_status != 2, "2");
+        _status = 2;
+        _;
+        _status = 1;
+    }
+}
+
+contract DTCCCompliantSTO is AccessControl, MinimalPausable, MinimalReentrancyGuard {
+    bytes32 constant COMPLIANCE_OFFICER = keccak256("COMPLIANCE_OFFICER");
+    bytes32 constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
+    bytes32 constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     
-    // Module addresses
-    ITokenCore public tokenCore;
-    IComplianceManager public complianceManager;
-    ICSADerivativesManager public derivativesManager;
-    IClearstreamManager public clearstreamManager;
-    
-    // External dependencies
+    // Storage - grouped to minimize slots
+    ITokenCoreMinimal public tokenCore;
+    IComplianceManagerMinimal public complianceManager;
+    ICSADerivativesManagerMinimal public derivativesManager;
+    IClearstreamManagerMinimal public clearstreamManager;
     AggregatorV3Interface public priceFeed;
-    uint256 public constant PRICE_STALENESS_THRESHOLD = 3600;
     
-    // Issuance tracking
-    mapping(bytes32 => ICSADerivatives.Issuance) public issuances;
+    uint256 constant PRICE_STALENESS_THRESHOLD = 3600;
+    
+    struct Issuance {
+        address investor;
+        uint96 amount;      // 96 bits for amount
+        uint64 timestamp;    // 64 bits for timestamp
+        uint64 lockupEnd;    // 64 bits for lockup
+        bool verified;
+        bool accredited;
+        string ipfsCID;      // Separate slot
+    }
+    
+    mapping(bytes32 => Issuance) public issuances;
     mapping(address => bytes32[]) public investorIssuances;
     
-    event ModulesUpdated(address tokenCore, address compliance, address derivatives, address clearstream);
+    event ModulesUpdated(address,address,address,address);
     
     constructor(
         address tokenCore_,
@@ -45,16 +110,10 @@ contract DTCCCompliantSTO is AccessControl, Pausable, ReentrancyGuard, IDTCCComp
         address clearstreamManager_,
         address priceFeed_
     ) {
-        require(tokenCore_ != address(0), "Invalid TokenCore");
-        require(complianceManager_ != address(0), "Invalid ComplianceManager");
-        require(derivativesManager_ != address(0), "Invalid DerivativesManager");
-        require(clearstreamManager_ != address(0), "Invalid ClearstreamManager");
-        require(priceFeed_ != address(0), "Invalid price feed");
-        
-        tokenCore = ITokenCore(tokenCore_);
-        complianceManager = IComplianceManager(complianceManager_);
-        derivativesManager = ICSADerivativesManager(derivativesManager_);
-        clearstreamManager = IClearstreamManager(clearstreamManager_);
+        tokenCore = ITokenCoreMinimal(tokenCore_);
+        complianceManager = IComplianceManagerMinimal(complianceManager_);
+        derivativesManager = ICSADerivativesManagerMinimal(derivativesManager_);
+        clearstreamManager = IClearstreamManagerMinimal(clearstreamManager_);
         priceFeed = AggregatorV3Interface(priceFeed_);
         
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -63,313 +122,175 @@ contract DTCCCompliantSTO is AccessControl, Pausable, ReentrancyGuard, IDTCCComp
         _grantRole(PAUSER_ROLE, msg.sender);
     }
     
-    // ========================================
-    // ERC20/ERC1400 Functions (Delegated)
-    // ========================================
+    // Delegated functions - minimal stack usage
+    function name() external view returns (string memory) { return tokenCore.name(); }
+    function symbol() external view returns (string memory) { return tokenCore.symbol(); }
+    function decimals() external pure returns (uint8) { return 18; }
+    function totalSupply() external view returns (uint256) { return tokenCore.totalSupply(); }
+    function balanceOf(address a) external view returns (uint256) { return tokenCore.balanceOf(a); }
     
-    function name() external view returns (string memory) {
-        return tokenCore.name();
+    function transfer(address to, uint256 amt) external whenNotPaused returns (bool) {
+        complianceManager.validateTransfer(msg.sender, to, amt);
+        return tokenCore.transfer(msg.sender, to, amt);
     }
     
-    function symbol() external view returns (string memory) {
-        return tokenCore.symbol();
+    function allowance(address o, address s) external view returns (uint256) { return tokenCore.allowance(o, s); }
+    
+    function approve(address s, uint256 amt) external whenNotPaused returns (bool) {
+        return tokenCore.approve(msg.sender, s, amt);
     }
     
-    function decimals() external pure returns (uint8) {
-        return 18;
+    function transferFrom(address f, address t, uint256 amt) external whenNotPaused returns (bool) {
+        complianceManager.validateTransfer(f, t, amt);
+        return tokenCore.transferFrom(msg.sender, f, t, amt);
     }
     
-    function totalSupply() external view returns (uint256) {
-        return tokenCore.totalSupply();
+    function balanceOfByPartition(bytes32 p, address h) external view returns (uint256) {
+        return tokenCore.balanceOfByPartition(p, h);
     }
     
-    function balanceOf(address account) external view returns (uint256) {
-        return tokenCore.balanceOf(account);
+    function partitionsOf(address h) external view returns (bytes32[] memory) {
+        return tokenCore.partitionsOf(h);
     }
     
-    function transfer(address to, uint256 amount) external whenNotPaused returns (bool) {
-        complianceManager.validateTransfer(msg.sender, to, amount);
-        return tokenCore.transfer(msg.sender, to, amount);
+    function transferByPartition(bytes32 p, address t, uint256 v, bytes calldata d) external whenNotPaused returns (bytes32) {
+        complianceManager.validateTransfer(msg.sender, t, v);
+        return tokenCore.transferByPartition(p, msg.sender, msg.sender, t, v, d, "");
     }
     
-    function allowance(address owner, address spender) external view returns (uint256) {
-        return tokenCore.allowance(owner, spender);
-    }
-    
-    function approve(address spender, uint256 amount) external whenNotPaused returns (bool) {
-        return tokenCore.approve(msg.sender, spender, amount);
-    }
-    
-    function transferFrom(address from, address to, uint256 amount) external whenNotPaused returns (bool) {
-        complianceManager.validateTransfer(from, to, amount);
-        return tokenCore.transferFrom(msg.sender, from, to, amount);
-    }
-    
-    // ERC1400 Partition Functions
-    function balanceOfByPartition(bytes32 partition, address tokenHolder) external view returns (uint256) {
-        return tokenCore.balanceOfByPartition(partition, tokenHolder);
-    }
-    
-    function partitionsOf(address tokenHolder) external view returns (bytes32[] memory) {
-        return tokenCore.partitionsOf(tokenHolder);
-    }
-    
-    function transferByPartition(
-        bytes32 partition,
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) external whenNotPaused returns (bytes32) {
-        complianceManager.validateTransfer(msg.sender, to, value);
-        return tokenCore.transferByPartition(partition, msg.sender, msg.sender, to, value, data, "");
-    }
-    
-    // ========================================
-    // Issuance Functions
-    // ========================================
-    
+    // Optimized issuance - minimal stack variables
     function issueTokens(
-        address investor,
-        uint256 amount,
-        string calldata ipfsCID,
-        uint256 lockupPeriod,
-        bytes20 csdAccount
-    ) external override onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32 issuanceId) {
-        require(investor != address(0), "Invalid investor");
-        require(amount > 0, "Amount must be > 0");
+        address i,
+        uint256 a,
+        string calldata c,
+        uint256 l,
+        bytes20 ca
+    ) external onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32 id) {
+        require(i != address(0) && a > 0, "0");
         
-        // Create issuance record
-        issuanceId = keccak256(abi.encodePacked(investor, block.timestamp, amount, ipfsCID));
+        id = keccak256(abi.encodePacked(i, block.timestamp, a, c));
         
-        issuances[issuanceId] = ICSADerivatives.Issuance({
-            investor: investor,
-            amount: amount,
-            ipfsCID: ipfsCID,
-            timestamp: block.timestamp,
-            lockupEnd: lockupPeriod > 0 ? block.timestamp + lockupPeriod : 0,
+        issuances[id] = Issuance({
+            investor: i,
+            amount: uint96(a),
+            timestamp: uint64(block.timestamp),
+            lockupEnd: l > 0 ? uint64(block.timestamp + l) : 0,
             verified: false,
-            accredited: complianceManager.isAccredited(investor)
+            accredited: complianceManager.isAccredited(i),
+            ipfsCID: c
         });
         
-        investorIssuances[investor].push(issuanceId);
+        investorIssuances[i].push(id);
         
-        // Mint tokens (using default partition)
-        bytes32[] memory defaultPartitions = tokenCore.getDefaultPartitions();
-        require(defaultPartitions.length > 0, "No default partitions");
-        tokenCore.mint(investor, amount, defaultPartitions[0]);
+        // Mint
+        bytes32[] memory dp = tokenCore.getDefaultPartitions();
+        require(dp.length > 0, "4");
+        tokenCore.mint(i, a, dp[0]);
         
-        // Set transfer lock if applicable
-        if (lockupPeriod > 0) {
-            complianceManager.setTransferLock(investor, block.timestamp + lockupPeriod);
-        }
+        if (l > 0) complianceManager.setTransferLock(i, block.timestamp + l);
+        if (ca != bytes20(0)) clearstreamManager.linkClearstreamAccount(i, ca);
         
-        // Link Clearstream account if provided
-        if (csdAccount != bytes20(0)) {
-            clearstreamManager.linkClearstreamAccount(investor, csdAccount);
-        }
-        
-        // Record investment for compliance
-        complianceManager.recordInvestment(investor, amount);
-        
-        return issuanceId;
+        complianceManager.recordInvestment(i, a);
     }
     
-    // ========================================
-    // Compliance Functions (Delegated)
-    // ========================================
-    
-    function verifyInvestor(
-        address investor,
-        string calldata kycProviderURL,
-        bool /* refreshIfVerified */
-    ) external override onlyRole(COMPLIANCE_OFFICER) returns (bytes32) {
-        return complianceManager.verifyInvestor(investor, kycProviderURL);
+    // Compliance functions - single line where possible
+    function verifyInvestor(address i, string calldata u, bool) external onlyRole(COMPLIANCE_OFFICER) returns (bytes32) {
+        return complianceManager.verifyInvestor(i, u);
     }
     
-    function setTransferLock(address investor, uint256 unlockTime) external override onlyRole(COMPLIANCE_OFFICER) {
-        complianceManager.setTransferLock(investor, unlockTime);
+    function setTransferLock(address i, uint256 t) external onlyRole(COMPLIANCE_OFFICER) {
+        complianceManager.setTransferLock(i, t);
     }
     
-    function forceTransfer(
-        address from,
-        address to,
-        uint256 amount,
-        string calldata reason
-    ) external override onlyRole(COMPLIANCE_OFFICER) nonReentrant whenNotPaused {
-        require(bytes(reason).length > 0, "Reason required");
-        tokenCore.transferFrom(msg.sender, from, to, amount);
-        emit ICSADerivatives.ComplianceOverride(msg.sender, from, reason);
+    function forceTransfer(address f, address t, uint256 a, string calldata r) 
+        external onlyRole(COMPLIANCE_OFFICER) nonReentrant whenNotPaused {
+        require(bytes(r).length > 0, "3");
+        tokenCore.transferFrom(msg.sender, f, t, a);
     }
     
-    function setOfferingType(ICSADerivatives.OfferingType offeringType) external override onlyRole(COMPLIANCE_OFFICER) {
-        complianceManager.setOfferingType(offeringType);
+    function setOfferingType(uint8 o) external onlyRole(COMPLIANCE_OFFICER) {
+        complianceManager.setOfferingType(o);
     }
     
-    function verifyQIB(address investor, bool isQIB_) external override onlyRole(COMPLIANCE_OFFICER) {
-        complianceManager.setQIBStatus(investor, isQIB_);
+    function verifyQIB(address i, bool b) external onlyRole(COMPLIANCE_OFFICER) {
+        complianceManager.setQIBStatus(i, b);
     }
     
-    function isQIB(address investor) external view override returns (bool) {
-        return complianceManager.isQIB(investor);
-    }
+    function isQIB(address i) external view returns (bool) { return complianceManager.isQIB(i); }
+    function setKYC(address u, bool a, uint64 e) external onlyRole(COMPLIANCE_OFFICER) { complianceManager.setKYC(u, a, e); }
+    function isKYCValid(address u) public view returns (bool) { return complianceManager.isKYCValid(u); }
     
-    // ========================================
-    // KYC Management
-    // ========================================
-    
-    function setKYC(address user, bool approved, uint64 expiry) external onlyRole(COMPLIANCE_OFFICER) {
-        complianceManager.setKYC(user, approved, expiry);
-    }
-    
-    function isKYCValid(address user) public view returns (bool) {
-        return complianceManager.isKYCValid(user);
-    }
-    
-    // ========================================
-    // Derivative Functions (Delegated) - REMOVED override keyword
-    // ========================================
-    
+    // Derivative functions - using bytes for minimal stack
     function reportDerivative(
-        ICSADerivatives.DerivativeData calldata derivativeData,
-        ICSADerivatives.CounterpartyData calldata counterparty1,
-        ICSADerivatives.CounterpartyData calldata counterparty2,
-        ICSADerivatives.CollateralData calldata collateralData,
-        ICSADerivatives.ValuationData calldata valuationData
+        bytes calldata d1, bytes calldata d2, bytes calldata d3, bytes calldata d4, bytes calldata d5
     ) external onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32) {
-        return derivativesManager.reportDerivative(
-            derivativeData,
-            counterparty1,
-            counterparty2,
-            collateralData,
-            valuationData
-        );
+        return derivativesManager.reportDerivative(d1, d2, d3, d4, d5);
     }
     
-    function correctDerivative(
-        bytes32 uti,
-        bytes32 priorUti,
-        ICSADerivatives.DerivativeData calldata correctedData
-    ) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        derivativesManager.correctDerivative(uti, priorUti, correctedData);
+    function correctDerivative(bytes32 u, bytes32 p, bytes calldata d) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        derivativesManager.correctDerivative(u, p, d);
     }
     
-    function reportError(
-        bytes32 uti,
-        string calldata reason
-    ) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        derivativesManager.reportError(uti, reason);
+    function reportError(bytes32 u, string calldata r) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        derivativesManager.reportError(u, r);
     }
     
-    // ADD MISSING FUNCTIONS from ICSADerivatives
-    function reportPosition(
-        bytes32 positionId,
-        bytes32[] calldata underlyingUtis,
-        ICSADerivatives.ValuationData calldata valuationData
-    ) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        derivativesManager.reportPosition(positionId, underlyingUtis, valuationData);
+    function reportPosition(bytes32 p, bytes32[] calldata u, bytes calldata v) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        derivativesManager.reportPosition(p, u, v);
     }
     
     function batchReportDerivatives(
-        ICSADerivatives.DerivativeData[] calldata derivativesData,
-        ICSADerivatives.CounterpartyData[] calldata counterparties1,
-        ICSADerivatives.CounterpartyData[] calldata counterparties2,
-        ICSADerivatives.CollateralData[] calldata collateralData,
-        ICSADerivatives.ValuationData[] calldata valuationData
+        bytes[] calldata d1, bytes[] calldata d2, bytes[] calldata d3, bytes[] calldata d4, bytes[] calldata d5
     ) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        derivativesManager.batchReportDerivatives(
-            derivativesData,
-            counterparties1,
-            counterparties2,
-            collateralData,
-            valuationData
-        );
+        derivativesManager.batchReportDerivatives(d1, d2, d3, d4, d5);
     }
     
-    // ========================================
-    // Clearstream Functions (Delegated) - REMOVED override keyword
-    // ========================================
-    
-    function initiateSettlement(
-        bytes32 tradeReference,
-        address buyer,
-        address seller,
-        uint256 quantity,
-        uint256 settlementAmount,
-        uint256 valueDate
-    ) external onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32) {
-        return clearstreamManager.initiateSettlement(
-            tradeReference,
-            buyer,
-            seller,
-            quantity,
-            settlementAmount,
-            valueDate
-        );
+    // Clearstream functions
+    function initiateSettlement(bytes32 t, address b, address s, uint256 q, uint256 a, uint256 v) 
+        external onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32) {
+        return clearstreamManager.initiateSettlement(t, b, s, q, a, v);
     }
     
-    function generateSettlementInstructions(bytes32 settlementId) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        clearstreamManager.generateSettlementInstructions(settlementId);
+    function generateSettlementInstructions(bytes32 i) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        clearstreamManager.generateSettlementInstructions(i);
     }
     
-    function confirmSettlement(bytes32 settlementId, bytes32 instructionReference) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        clearstreamManager.confirmSettlement(settlementId, instructionReference);
+    function confirmSettlement(bytes32 i, bytes32 r) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        clearstreamManager.confirmSettlement(i, r);
     }
     
-    function completeSettlement(bytes32 settlementId) external onlyRole(ISSUER_ROLE) whenNotPaused {
-        clearstreamManager.completeSettlement(settlementId);
+    function completeSettlement(bytes32 i) external onlyRole(ISSUER_ROLE) whenNotPaused {
+        clearstreamManager.completeSettlement(i);
     }
     
-    function linkClearstreamAccount(address investor, bytes20 csdAccount) external onlyRole(COMPLIANCE_OFFICER) {
-        clearstreamManager.linkClearstreamAccount(investor, csdAccount);
+    function linkClearstreamAccount(address i, bytes20 a) external onlyRole(COMPLIANCE_OFFICER) {
+        clearstreamManager.linkClearstreamAccount(i, a);
     }
     
-    // ========================================
-    // View Functions
-    // ========================================
-    
-    function getNAV() public view override returns (uint256) {
-        (, int256 price, , uint256 updatedAt, ) = priceFeed.latestRoundData();
-        require(price > 0, "Invalid price");
-        require(block.timestamp - updatedAt <= PRICE_STALENESS_THRESHOLD, "Stale price");
+    // View functions
+    function getNAV() public view returns (uint256) {
+        (, int256 p, , uint256 u, ) = priceFeed.latestRoundData();
+        require(p > 0 && block.timestamp - u <= PRICE_STALENESS_THRESHOLD, "5");
         
-        uint256 totalSupply_ = tokenCore.totalSupply();
-        if (totalSupply_ == 0) return 0;
+        uint256 ts = tokenCore.totalSupply();
+        if (ts == 0) return 0;
         
-        return (totalSupply_ * uint256(price)) / 10 ** priceFeed.decimals();
+        return (ts * uint256(p)) / 10 ** priceFeed.decimals();
     }
     
-    function getInvestorIssuances(address investor) external view returns (bytes32[] memory) {
-        return investorIssuances[investor];
+    function getInvestorIssuances(address i) external view returns (bytes32[] memory) {
+        return investorIssuances[i];
     }
     
-    // ========================================
-    // Admin Functions
-    // ========================================
-    
-    function updateModules(
-        address tokenCore_,
-        address complianceManager_,
-        address derivativesManager_,
-        address clearstreamManager_
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (tokenCore_ != address(0)) tokenCore = ITokenCore(tokenCore_);
-        if (complianceManager_ != address(0)) complianceManager = IComplianceManager(complianceManager_);
-        if (derivativesManager_ != address(0)) derivativesManager = ICSADerivativesManager(derivativesManager_);
-        if (clearstreamManager_ != address(0)) clearstreamManager = IClearstreamManager(clearstreamManager_);
-        
-        emit ModulesUpdated(tokenCore_, complianceManager_, derivativesManager_, clearstreamManager_);
+    function updateModules(address t, address c, address d, address cl) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (t != address(0)) tokenCore = ITokenCoreMinimal(t);
+        if (c != address(0)) complianceManager = IComplianceManagerMinimal(c);
+        if (d != address(0)) derivativesManager = ICSADerivativesManagerMinimal(d);
+        if (cl != address(0)) clearstreamManager = IClearstreamManagerMinimal(cl);
+        emit ModulesUpdated(t, c, d, cl);
     }
     
-    function pause() external onlyRole(PAUSER_ROLE) {
-        _pause();
-    }
-    
-    function unpause() external onlyRole(PAUSER_ROLE) {
-        _unpause();
-    }
-    
-    // Required overrides from IDTCCCompliantSTO
-    function fulfillVerification(bytes32, bool) external pure override {
-        revert("Not implemented");
-    }
+    function pause() external onlyRole(PAUSER_ROLE) { _pause(); }
+    function unpause() external onlyRole(PAUSER_ROLE) { _unpause(); }
+    function fulfillVerification(bytes32, bool) external pure { revert("0"); }
 }
